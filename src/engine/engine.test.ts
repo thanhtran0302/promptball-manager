@@ -60,6 +60,10 @@ describe('MatchEngine', () => {
     // chaque équipe a bien 11 joueurs sur le terrain
     expect(st.home.lineup).toHaveLength(11)
     expect(st.away.lineup).toHaveLength(11)
+
+    // discipline plausible
+    expect(st.home.stats.redCards + st.away.stats.redCards).toBeLessThanOrEqual(4)
+    expect(st.home.stats.penalties + st.away.stats.penalties).toBeLessThanOrEqual(5)
   })
 
   it('le gardien est dans la composition initiale', () => {
@@ -172,6 +176,79 @@ describe('MatchEngine', () => {
     expect(engine.state.home.subsUsed).toBe(1)
     expect(engine.state.players['h15'].onPitch).toBe(true)
     expect(engine.state.players[outId].onPitch).toBe(false)
+  })
+
+  it('gère une exclusion : équipe à 10, match mené à son terme', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 31,
+    })
+    engine.runTicks(600)
+    const victim = engine.state.away.lineup[5]
+    ;(engine as unknown as { sendOff: (s: 'away', id: string, r: 'direct') => void }).sendOff(
+      'away',
+      victim,
+      'direct',
+    )
+    expect(engine.state.players[victim].onPitch).toBe(false)
+    expect(engine.state.players[victim].sentOff).toBe(true)
+    expect(engine.state.away.stats.redCards).toBe(1)
+    // la compo garde 11 postes (le poste exclu reste vacant)
+    expect(engine.state.away.lineup).toHaveLength(11)
+    // changement de formation refusé silencieusement en infériorité (mapping conservé)
+    const instr = structuredClone(engine.state.away.instructions)
+    instr.team = { ...instr.team, formation: '3-5-2' }
+    engine.applyInstructions('away', instr)
+    expect(engine.state.away.lineup).toHaveLength(11)
+    // le match va au bout sans crash
+    let guard = 0
+    while (engine.state.phase !== 'finished' && guard++ < 500) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+    }
+    expect(engine.state.phase).toBe('finished')
+    // l'exclu n'est jamais revenu
+    expect(engine.state.players[victim].onPitch).toBe(false)
+  })
+
+  it('résout un penalty : événement, stat, issue cohérente', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 41,
+    })
+    engine.runTicks(400)
+    const before = engine.state.score.home
+    ;(engine as unknown as { awardPenalty: (s: 'home') => void }).awardPenalty('home')
+    expect(engine.state.home.stats.penalties).toBe(1)
+    expect(engine.state.events.some((e) => e.type === 'penalty')).toBe(true)
+    // laisse la frappe arriver
+    engine.runTicks(60)
+    const resolved = engine.state.events.some(
+      (e) => e.type === 'goal' || e.type === 'save' || e.type === 'off_target',
+    )
+    expect(resolved).toBe(true)
+    // but sur penalty bien compté
+    const goalEv = engine.state.events.find((e) => e.type === 'goal' && e.message.includes('penalty'))
+    if (goalEv) expect(engine.state.score.home).toBe(before + 1)
+  })
+
+  it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
+    let sot = 0
+    let shots = 0
+    for (const seed of [71, 77, 83]) {
+      const engine = runFullMatch(seed)
+      sot += engine.state.home.stats.shotsOnTarget + engine.state.away.stats.shotsOnTarget
+      shots += engine.state.home.stats.shots + engine.state.away.stats.shots
+    }
+    const ratio = sot / Math.max(shots, 1)
+    expect(ratio).toBeGreaterThan(0.2)
+    expect(ratio).toBeLessThan(0.6)
   })
 })
 

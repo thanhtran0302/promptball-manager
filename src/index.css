@@ -905,6 +905,16 @@ p.errors {
   color: var(--warn);
 }
 
+.ev-red_card {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.ev-penalty {
+  color: #fde047;
+  font-weight: 700;
+}
+
 .ev-stamina_low {
   color: var(--warn);
   font-style: italic;

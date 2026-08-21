@@ -18,12 +18,16 @@ const ANNOT_LABELS: Partial<Record<MatchEvent['type'], string>> = {
   off_target: 'À côté',
   offside: 'Hors-jeu',
   goal_kick: 'Six mètres',
+  red_card: 'Rouge !',
+  penalty: 'Penalty !',
 }
 
 const ANNOT_COLORS: Partial<Record<MatchEvent['type'], string>> = {
   goal: '#4ade80',
   save: '#60a5fa',
   offside: '#fb923c',
+  red_card: '#f87171',
+  penalty: '#fde047',
 }
 
 export interface DrawOptions {

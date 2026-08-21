@@ -25,6 +25,10 @@ const ATTR_LABELS: Record<string, string> = {
   tackling: 'tacle',
   agility: 'vivacite',
   goalkeeper: 'gardien',
+  decisions: 'decisions',
+  vision: 'vision',
+  composure: 'sang-froid',
+  aggression: 'agressivite',
 }
 
 function squadContext(team: Team, opponent: Team): string {

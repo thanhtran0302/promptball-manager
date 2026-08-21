@@ -17,6 +17,14 @@ import {
 } from './instructions'
 import { maxSpeed, staminaFactor, updateStamina } from './stamina'
 import {
+  attackTarget,
+  attackWeights,
+  defenseTarget,
+  defenseWeights,
+  type AttackSliceInput,
+  type DefenseSliceInput,
+} from './slices'
+import {
   HALF_TICKS,
   PITCH,
   TICK_SEC,
@@ -81,12 +89,16 @@ export class MatchEngine {
   private smoothed = new Map<Side, { tx: number; ty: number }>()
   /** phase attaque (1) / défense (0) lissée par côté — transitions visibles */
   private phase = new Map<Side, number>()
-  /** poids de pressing par id : les défenseurs désignés ferment sur le porteur */
-  private pressers = new Map<string, number>()
+  /** rang des deux défenseurs les plus proches du ballon (0 = premier presseur) */
+  private presserRanks = new Map<string, 0 | 1>()
   /** ligne du hors-jeu par côté, en espace ATTAQUANT (tx max pour rester en jeu) */
   private offsideLine = new Map<Side, number>()
   /** passes exemptées de hors-jeu après remise en jeu (engagement, 6 m, corner, CF) */
   private restartExemptUntilTick = 0
+  /** cible issue du dernier slice (micro-décision), en coordonnées terrain */
+  private sliceTargets = new Map<string, { x: number; y: number }>()
+  /** dernier camp en possession, pour invalider les slices au changement de camp */
+  private lastSlicePossession: Side | null = null
 
   constructor(opts: MatchOptions) {
     this.rng = new Rng(opts.seed)
@@ -108,6 +120,9 @@ export class MatchEngine {
           stats: newStats(),
           warned40: false,
           warned20: false,
+          behavior: 'hold_position',
+          yellowCards: 0,
+          sentOff: false,
         }
       }
     }
@@ -116,6 +131,7 @@ export class MatchEngine {
       tick: 0,
       phase: 'first_half',
       addedTimeSec: Math.round(this.rng.range(30, 180)),
+      refereeStrictness: this.rng.range(0.8, 1.3),
       score: { home: 0, away: 0 },
       ball: {
         x: PITCH.L / 2,
@@ -153,7 +169,9 @@ export class MatchEngine {
         corners: 0,
         fouls: 0,
         yellowCards: 0,
+        redCards: 0,
         offsides: 0,
+        penalties: 0,
         passes: 0,
         passesOk: 0,
       },
@@ -393,13 +411,15 @@ export class MatchEngine {
       shooter.stats.goals++
       this.bumpRating(shooterId, 1)
       const assistId = t.assistCandidateId
-      if (assistId && st.players[assistId].side === shootingSide) {
+      if (assistId && !t.fromPenalty && st.players[assistId].side === shootingSide) {
         st.players[assistId].stats.assists++
         this.bumpRating(assistId, 0.5)
       }
       this.log(
         'goal',
-        `⚽ BUT ! ${this.nameOf(shooterId)} marque pour ${this.tms(shootingSide).team.short}${assistId && assistId !== shooterId ? ` (passe décisive de ${this.nameOf(assistId)})` : ''} !`,
+        t.fromPenalty
+          ? `⚽ BUT ! ${this.nameOf(shooterId)} transforme le penalty pour ${this.tms(shootingSide).team.short} !`
+          : `⚽ BUT ! ${this.nameOf(shooterId)} marque pour ${this.tms(shootingSide).team.short}${assistId && assistId !== shooterId ? ` (passe décisive de ${this.nameOf(assistId)})` : ''} !`,
         shootingSide,
         shooterId,
         t.toX,
@@ -426,9 +446,27 @@ export class MatchEngine {
         this.restartExemptUntilTick = st.tick + 40
         this.nextDecisionTick = st.tick + 14
       }
-      this.log('save', `Frappe de ${this.nameOf(shooterId)}… arrêté par le gardien !`, shootingSide, shooterId, t.toX, t.toY)
+      this.log(
+        'save',
+        t.fromPenalty
+          ? `Penalty arrêté ! Le gardien de ${defTms.team.short} repousse la frappe de ${this.nameOf(shooterId)} !`
+          : `Frappe de ${this.nameOf(shooterId)}… arrêté par le gardien !`,
+        shootingSide,
+        shooterId,
+        t.toX,
+        t.toY,
+      )
     } else if (t.shotOutcome === 'off_target') {
-      this.log('off_target', `Frappe de ${this.nameOf(shooterId)}… à côté.`, shootingSide, shooterId, t.toX, t.toY)
+      this.log(
+        'off_target',
+        t.fromPenalty
+          ? `${this.nameOf(shooterId)} manque le penalty ! C'est au-dessus…`
+          : `Frappe de ${this.nameOf(shooterId)}… à côté.`,
+        shootingSide,
+        shooterId,
+        t.toX,
+        t.toY,
+      )
       if (this.rng.chance(0.45)) {
         // corner
         const attTms = this.tms(shootingSide)
@@ -505,9 +543,130 @@ export class MatchEngine {
   private keeperOf(side: Side): LivePlayer | null {
     const tms = this.tms(side)
     for (const id of tms.lineup) {
-      if (this.player(id).role === 'GK') return this.state.players[id]
+      if (this.player(id).role === 'GK' && this.state.players[id].onPitch) return this.state.players[id]
     }
-    return null
+    // gardien exclu : le joueur de champ le plus à même d'aller au but
+    let best: LivePlayer | null = null
+    let bestAttr = -1
+    for (const lp of Object.values(this.state.players)) {
+      if (!lp.onPitch || lp.side !== side) continue
+      const gk = this.player(lp.id).attributes.goalkeeper
+      if (gk > bestAttr) {
+        bestAttr = gk
+        best = lp
+      }
+    }
+    return best
+  }
+
+  /** Exclusion : le joueur quitte le terrain, son équipe finit en infériorité. */
+  private sendOff(side: Side, playerId: string, reason: 'second_yellow' | 'direct') {
+    const st = this.state
+    const lp = st.players[playerId]
+    lp.onPitch = false
+    lp.sentOff = true
+    this.tms(side).stats.redCards++
+    this.bumpRating(playerId, -1.5)
+    this.sliceTargets.delete(playerId)
+    this.presserRanks.delete(playerId)
+    if (st.ball.carrierId === playerId) {
+      st.ball.carrierId = null
+      const winner = this.nearestTo(st.ball.x, st.ball.y)
+      if (winner) {
+        st.ball.carrierId = winner.id
+        st.possession = winner.side
+      }
+    }
+    const teamName = this.tms(side).team.short
+    this.log(
+      'red_card',
+      reason === 'second_yellow'
+        ? `🟥 Deuxième jaune : ${this.nameOf(playerId)} est exclu ! ${teamName} finira à ${this.tms(side).lineup.filter((id) => st.players[id].onPitch).length}.`
+        : `🟥 Carton rouge direct pour ${this.nameOf(playerId)} ! ${teamName} est réduit à ${this.tms(side).lineup.filter((id) => st.players[id].onPitch).length}.`,
+      side,
+      playerId,
+    )
+  }
+
+  /**
+   * Penalty : temps mort, tireur désigné (meilleur tir + sang-froid),
+   * résolution un coup — la frappe voyage jusqu'au but via un transit tir.
+   */
+  private awardPenalty(attSide: Side) {
+    const st = this.state
+    const attTms = this.tms(attSide)
+    const defSide: Side = attSide === 'home' ? 'away' : 'home'
+    attTms.stats.penalties++
+
+    // tireur : meilleur tir+sang-froid parmi les joueurs sur le terrain
+    let shooter: LivePlayer | null = null
+    let bestScore = -1
+    for (const lp of Object.values(st.players)) {
+      if (!lp.onPitch || lp.side !== attSide) continue
+      if (this.player(lp.id).role === 'GK') continue
+      const s = this.player(lp.id).attributes.shooting + this.player(lp.id).attributes.composure
+      if (s > bestScore) {
+        bestScore = s
+        shooter = lp
+      }
+    }
+    if (!shooter) return
+
+    const goal = this.attackedGoal(attSide)
+    const spotX = goal.x === PITCH.L ? PITCH.L - 11 : 11
+    const spotY = PITCH.W / 2
+    shooter.x = spotX - (goal.x === PITCH.L ? 2 : -2)
+    shooter.y = spotY
+    shooter.prevX = shooter.x
+    shooter.prevY = shooter.y
+    st.ball.x = spotX
+    st.ball.y = spotY
+    st.ball.prevX = spotX
+    st.ball.prevY = spotY
+
+    this.log(
+      'penalty',
+      `Penalty pour ${attTms.team.short} ! ${this.nameOf(shooter.id)} s'élance…`,
+      attSide,
+      shooter.id,
+      spotX,
+      spotY,
+    )
+
+    // conversion : ~76 % de base, ajustée tireur vs gardien
+    const keeper = this.keeperOf(defSide)
+    const gkAttr = keeper ? this.player(keeper.id).attributes.goalkeeper : 50
+    const shooterAttr = this.player(shooter.id)
+    const mental = (shooterAttr.attributes.shooting + shooterAttr.attributes.composure) / 2
+    let conv = clamp(0.76 + (mental - 50) / 99 * 0.25 - (gkAttr - 50) / 99 * 0.3, 0.5, 0.93)
+    let outcome: BallTransit['shotOutcome']
+    if (this.rng.chance(conv)) outcome = 'goal'
+    else outcome = this.rng.chance(0.75) ? 'save' : 'off_target'
+
+    shooter.stats.shots++
+    attTms.stats.shots++
+    if (outcome === 'goal' || outcome === 'save') attTms.stats.shotsOnTarget++
+    this.bumpRating(shooter.id, outcome === 'goal' ? 0.8 : -0.4)
+
+    st.ball.carrierId = null
+    st.ball.transit = {
+      fromX: spotX,
+      fromY: spotY,
+      toX: goal.x,
+      toY: goal.y,
+      startTick: st.tick,
+      endTick: st.tick + 22,
+      kind: 'shot',
+      success: outcome !== 'off_target',
+      shotOutcome: outcome,
+      shooterId: shooter.id,
+      fromPenalty: true,
+    }
+    this.freezeUntilTick = st.tick + 24
+    this.restartExemptUntilTick = st.tick + 45
+    this.nextDecisionTick = st.tick + 26
+    this.lastPasserId = null
+    this.lastKicker = null
   }
 
   private nearestTo(x: number, y: number, side?: Side): LivePlayer | null {
@@ -569,7 +728,7 @@ export class MatchEngine {
       const offCenter = Math.abs(carrier.y - goal.y)
       const angleF = 1 - Math.min(offCenter / 28, 1) * 0.6
       const rangeF = Math.pow((25 - Math.min(dGoal, 25)) / 25, 2.2)
-      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.25
+      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.17
       if (dGoal < 16) w *= 1.75 // dans la surface : on conclut l'action
       w /= 1 + pressure * 0.3
       if (pi?.instruction === 'shoot_more') w *= 2.2
@@ -696,18 +855,23 @@ export class MatchEngine {
 
     const offCenter = Math.abs(carrier.y - goal.y)
     const angleF = 1 - Math.min(offCenter / 30, 1) * 0.55
-    let xg = 0.42 * Math.exp(-d / 7.5) * angleF
-    xg = clamp(
-      (xg * (0.7 + (p.attributes.shooting / 99) * 0.6)) / (0.7 + (gkAttr / 99) * 0.6),
-      0.02,
-      0.4,
-    )
+
+    // résolution en deux étapes (modèle type OFM) :
+    // 1) la frappe est-elle cadrée ? 2) cadrée, entre-t-elle ?
+    const mental = (p.attributes.shooting + p.attributes.composure + p.attributes.decisions) / 3
+    let onTarget = clamp(0.45 + ((mental - 50) / 99) * 0.55, 0.15, 0.85)
+    onTarget *= clamp(1.05 - d / 35, 0.35, 1) * angleF // loin et/ou angle fermé : plus dur
+    onTarget = clamp(onTarget, 0.08, 0.8)
 
     let outcome: BallTransit['shotOutcome']
-    if (this.rng.chance(xg)) outcome = 'goal'
-    else {
-      const r = this.rng.next()
-      outcome = r < 0.45 ? 'off_target' : r < 0.85 ? 'save' : 'blocked'
+    if (this.rng.chance(onTarget)) {
+      let conv = 0.26 + (p.attributes.shooting - gkAttr) / 150
+      if (d < 11) conv *= 1.25 // très proche du but
+      conv = clamp(conv, 0.08, 0.55)
+      if (this.rng.chance(conv)) outcome = 'goal'
+      else outcome = this.rng.chance(0.85) ? 'save' : 'blocked'
+    } else {
+      outcome = 'off_target'
     }
 
     carrier.stats.shots++
@@ -773,18 +937,38 @@ export class MatchEngine {
     // tentative de tacle
     if (!this.rng.chance(0.68)) return // tacle manqué, l'attaquant passe
 
-    if (this.rng.chance(0.26)) {
-      // faute
-      const oppTmsStats = oppTms.stats
-      oppTmsStats.fouls++
+    // faute : modulée par l'agressivité du tacleur et la sévérité de l'arbitre
+    const foulProb = 0.26 * (0.6 + (defP.attributes.aggression / 99) * 0.8) * st.refereeStrictness
+    if (this.rng.chance(foulProb)) {
+      oppTms.stats.fouls++
       first.stats.fouls++
       this.bumpRating(first.id, -0.15)
-      this.log('foul', `Faute de ${this.nameOf(first.id)} sur ${this.nameOf(carrier.id)}.`, oppSide, first.id)
-      if (this.rng.chance(0.22)) {
-        oppTmsStats.yellowCards++
+      this.log('foul', `Faute de ${this.nameOf(first.id)} sur ${this.nameOf(carrier.id)}.`, oppSide, first.id, carrier.x, carrier.y)
+
+      // faute dans la surface de réparation → penalty ?
+      const goal = this.attackedGoal(carrier.side)
+      const inBox = Math.abs(carrier.x - goal.x) < 16.5 && Math.abs(carrier.y - PITCH.W / 2) < 20.16
+      if (inBox && this.rng.chance(0.03)) {
+        this.awardPenalty(carrier.side)
+        return
+      }
+
+      // cartons : faute cartonnable (~13 %), dont 4 % de rouges directs
+      if (this.rng.chance(0.13 * st.refereeStrictness)) {
+        if (this.rng.chance(0.04)) {
+          this.sendOff(oppSide, first.id, 'direct')
+          return
+        }
+        first.yellowCards++
+        oppTms.stats.yellowCards++
         this.bumpRating(first.id, -0.3)
         this.log('yellow_card', `🟨 Carton jaune pour ${this.nameOf(first.id)}.`, oppSide, first.id)
+        if (first.yellowCards >= 2) {
+          this.sendOff(oppSide, first.id, 'second_yellow')
+          return
+        }
       }
+
       // coup franc : possession conservée, petit temps de repli
       st.ball.carrierId = carrier.id
       st.possession = carrier.side
@@ -813,6 +997,13 @@ export class MatchEngine {
   private movePlayers() {
     const st = this.state
     this.updatePhaseAndPressers()
+
+    // changement de camp : les comportements choisis n'ont plus de sens
+    if (st.possession !== this.lastSlicePossession) {
+      this.lastSlicePossession = st.possession
+      this.sliceTargets.clear()
+    }
+
     if (st.tick % 5 === 0) {
       for (const lp of Object.values(st.players)) {
         if (!lp.onPitch) continue
@@ -826,7 +1017,21 @@ export class MatchEngine {
       lp.prevY = lp.y
 
       const p = this.player(lp.id)
-      const tgt = this.targetFor(lp)
+
+      // slice (micro-décision) échelonnée : un tiers des joueurs par tick
+      const slotIdx = this.tms(lp.side).lineup.indexOf(lp.id)
+      if (
+        p.role !== 'GK' &&
+        st.ball.carrierId !== lp.id &&
+        st.tick % 3 === slotIdx % 3
+      ) {
+        this.evaluateSlice(lp)
+      }
+
+      const tgt =
+        st.ball.carrierId !== lp.id && p.role !== 'GK'
+          ? this.sliceTargets.get(lp.id) ?? this.targetFor(lp)
+          : this.targetFor(lp)
       const vmax = maxSpeed(p.attributes.pace, lp.stamina)
       const d = dist(lp.x, lp.y, tgt.x, tgt.y)
       let speedRatio = 0
@@ -871,9 +1076,9 @@ export class MatchEngine {
   }
 
   /**
-   * Phase attaque/défense lissée par côté (transitions visibles) et
-   * désignation des pressemens : les deux joueurs de champ les plus proches
-   * du ballon viennent fermer sur le porteur, goal-side.
+   * Phase attaque/défense lissée par côté (transitions visibles), rang des
+   * pressemens (les deux joueurs de champ les plus proches du ballon) et
+   * ligne de hors-jeu par camp attaquant.
    */
   private updatePhaseAndPressers() {
     const st = this.state
@@ -882,18 +1087,17 @@ export class MatchEngine {
       const cur = this.phase.get(side) ?? 0.5
       this.phase.set(side, cur + (target - cur) * 0.04)
     }
-    this.pressers.clear()
+    this.presserRanks.clear()
     for (const side of ['home', 'away'] as const) {
       if (st.possession === side) continue
-      const pf = PRESS_FACTOR[this.tms(side).instructions.team.pressing]
       const cands = Object.values(st.players)
         .filter((lp) => lp.onPitch && lp.side === side && this.player(lp.id).role !== 'GK')
         .sort(
           (a, b) =>
             dist(a.x, a.y, st.ball.x, st.ball.y) - dist(b.x, b.y, st.ball.x, st.ball.y),
         )
-      if (cands[0]) this.pressers.set(cands[0].id, Math.min(0.85, 0.45 + pf * 0.27))
-      if (cands[1]) this.pressers.set(cands[1].id, Math.min(0.5, 0.18 + pf * 0.16))
+      if (cands[0]) this.presserRanks.set(cands[0].id, 0)
+      if (cands[1]) this.presserRanks.set(cands[1].id, 1)
     }
 
     // ligne de hors-jeu pour chaque camp attaquant = position de l'avant-dernier
@@ -920,7 +1124,88 @@ export class MatchEngine {
     return r.tx > line + 0.03 // dépassement net (~3 m au-delà de l'avant-dernier défenseur)
   }
 
-  private targetFor(lp: LivePlayer): { x: number; y: number } {
+  /** Micro-décision façon FM : choix pondéré d'un comportement, cible en terrain. */
+  private evaluateSlice(lp: LivePlayer) {
+    const st = this.state
+    const tms = this.tms(lp.side)
+    const p = this.player(lp.id)
+    if (p.role === 'GK') return
+    const ab = clamp(this.phase.get(lp.side) ?? 0.5, 0, 1)
+    const base = this.formulaTargetTs(lp)
+    const ballTs = this.toTeamSpace(lp.side, st.ball.x, st.ball.y)
+    const pTs = this.toTeamSpace(lp.side, lp.x, lp.y)
+    const pi = this.instrFor(tms, lp.id)
+    const slots = FORMATION_SLOTS[tms.instructions.team.formation]
+    const slotIdx = tms.lineup.indexOf(lp.id)
+    const slot = slots[slotIdx >= 0 ? slotIdx : 0]
+
+    if (ab > 0.55) {
+      const inp: AttackSliceInput = {
+        attrs: p.attributes,
+        role: slot.role,
+        ti: tms.instructions.team,
+        pi,
+        playerTx: pTs.tx,
+        playerTy: pTs.ty,
+        ballTx: ballTs.tx,
+        ballTy: ballTs.ty,
+        offsideLineTx: this.offsideLine.get(lp.side) ?? 0.9,
+        minute: this.minute(),
+        goalDiff:
+          st.score[lp.side] - st.score[lp.side === 'home' ? 'away' : 'home'],
+        stamina: lp.stamina,
+      }
+      const weights = attackWeights(inp)
+      const chosen = weights[this.rng.weighted(weights.map((w) => w.weight))]
+      lp.behavior = chosen.behavior
+      const t = attackTarget(chosen.behavior, inp, base.tx, base.ty)
+      const pos = this.toPitch(lp.side, t.tx, t.ty)
+      this.sliceTargets.set(lp.id, {
+        x: clamp(pos.x, 0.5, PITCH.L - 0.5),
+        y: clamp(pos.y, 0.5, PITCH.W - 0.5),
+      })
+    } else if (ab < 0.45) {
+      // plus proche attaquant adverse (espace défenseur)
+      const oppSide: Side = lp.side === 'home' ? 'away' : 'home'
+      let nearest: { tx: number; ty: number } | null = null
+      let nearestD = Infinity
+      for (const o of Object.values(st.players)) {
+        if (!o.onPitch || o.side !== oppSide || this.player(o.id).role === 'GK') continue
+        const d = dist(o.x, o.y, lp.x, lp.y)
+        if (d < nearestD) {
+          nearestD = d
+          nearest = this.toTeamSpace(lp.side, o.x, o.y)
+        }
+      }
+      const inp: DefenseSliceInput = {
+        attrs: p.attributes,
+        role: slot.role,
+        ti: tms.instructions.team,
+        pi,
+        playerTx: pTs.tx,
+        playerTy: pTs.ty,
+        ballTx: ballTs.tx,
+        ballTy: ballTs.ty,
+        presserRank: this.presserRanks.get(lp.id),
+        nearestAttackerDist: nearestD,
+      }
+      const weights = defenseWeights(inp)
+      const chosen = weights[this.rng.weighted(weights.map((w) => w.weight))]
+      lp.behavior = chosen.behavior
+      const t = defenseTarget(chosen.behavior, inp, base.tx, base.ty, nearest)
+      const pos = this.toPitch(lp.side, t.tx, t.ty)
+      this.sliceTargets.set(lp.id, {
+        x: clamp(pos.x, 0.5, PITCH.L - 0.5),
+        y: clamp(pos.y, 0.5, PITCH.W - 0.5),
+      })
+    }
+  }
+
+  /**
+   * Cible de positionnement par la formule (espace équipe), sans le gardien.
+   * Sert de comportement neutre (hold_position / hold_shape) aux slices.
+   */
+  private formulaTargetTs(lp: LivePlayer): { tx: number; ty: number } {
     const st = this.state
     const tms = this.tms(lp.side)
     const ti = tms.instructions.team
@@ -930,13 +1215,6 @@ export class MatchEngine {
     const ballTs = this.smoothBall(lp.side)
     // phase lissée : 1 = en attaque, 0 = en défense, transition sur ~2,5 s
     const ab = clamp(this.phase.get(lp.side) ?? 0.5, 0, 1)
-
-    if (p.role === 'GK') {
-      let tx = 0.03
-      if (ballTs.tx > 0.78) tx += Math.min((ballTs.tx - 0.78) * 0.4, 0.06)
-      const ty = 0.5 + clamp(ballTs.ty - 0.5, -0.22, 0.22)
-      return this.toPitch(lp.side, tx, ty)
-    }
 
     const slots: Slot[] = FORMATION_SLOTS[ti.formation]
     const slot = slots[slotIdx >= 0 ? slotIdx : 0]
@@ -995,21 +1273,23 @@ export class MatchEngine {
       const line = this.offsideLine.get(lp.side) ?? 0.95
       tx = Math.min(tx, line + 0.025)
     }
+    return { tx: p.role === 'GK' ? 0.03 : tx, ty }
+  }
 
-    // --- pressing : les défenseurs désignés viennent fermer sur le porteur ---
-    const pressW = this.pressers.get(lp.id)
-    if (pressW !== undefined && ab < 0.6 && st.ball.carrierId) {
-      const ownGoal = this.attackedGoal(lp.side === 'home' ? 'away' : 'home')
-      // point légèrement côté but par rapport au ballon (défenseur se place goal-side)
-      const gsx = st.ball.x + (ownGoal.x - st.ball.x) * 0.12
-      const gsy = st.ball.y + (ownGoal.y - st.ball.y) * 0.12
-      const pt = this.toTeamSpace(lp.side, gsx, gsy)
-      tx = tx * (1 - pressW) + pt.tx * pressW
-      ty = ty * (1 - pressW) + pt.ty * pressW
+  private targetFor(lp: LivePlayer): { x: number; y: number } {
+    const p = this.player(lp.id)
+    const ballTs = this.smoothBall(lp.side)
+
+    if (p.role === 'GK') {
+      let tx = 0.03
+      if (ballTs.tx > 0.78) tx += Math.min((ballTs.tx - 0.78) * 0.4, 0.06)
+      const ty = 0.5 + clamp(ballTs.ty - 0.5, -0.22, 0.22)
+      return this.toPitch(lp.side, tx, ty)
     }
 
+    const t = this.formulaTargetTs(lp)
     const w = this.wander.get(lp.id)
-    const pos = this.toPitch(lp.side, tx, ty)
+    const pos = this.toPitch(lp.side, t.tx, t.ty)
     return {
       x: clamp(pos.x + (w?.dx ?? 0), 0.5, PITCH.L - 0.5),
       y: clamp(pos.y + (w?.dy ?? 0), 0.5, PITCH.W - 0.5),
@@ -1040,6 +1320,7 @@ export class MatchEngine {
       const slots = FORMATION_SLOTS[tms.instructions.team.formation]
       tms.lineup.forEach((id, i) => {
         const lp = st.players[id]
+        if (!lp.onPitch) return // exclu : le poste reste vacant
         const slot = slots[i]
         const pos = this.toPitch(tms.side, slot.x, slot.y)
         lp.x = pos.x
@@ -1121,9 +1402,10 @@ export class MatchEngine {
     const hasLineup = Array.isArray(instr.lineup) && instr.lineup.length === 11
     if (instr.team.formation !== oldFormation) {
       if (!hasLineup) {
-        // réassignation automatique des 11 joueurs aux nouveaux postes
-        const onPitch = oldLineup.map((id) => this.player(id))
-        tms.lineup = assignSlots(onPitch, instr.team.formation)
+        // réassignation automatique des joueurs présents aux nouveaux postes
+        // (impossible en infériorité numérique : on garde le mapping actuel)
+        const onPitch = oldLineup.map((id) => this.player(id)).filter((_, i) => this.state.players[oldLineup[i]].onPitch)
+        if (onPitch.length === 11) tms.lineup = assignSlots(onPitch, instr.team.formation)
       }
       this.log('info', `${tms.team.short} passe en ${instr.team.formation}.`, side)
     }

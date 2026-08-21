@@ -21,6 +21,14 @@ export interface PlayerAttributes {
   agility: number
   /** Gardien : arrêts (seulement pertinent pour le GK) */
   goalkeeper: number
+  /** Décisions : qualité des choix (micro-décisions des slices) */
+  decisions: number
+  /** Vision : voit les appels et les lignes de passe */
+  vision: number
+  /** Sang-froid : précision sous pression (tirs, penalties) */
+  composure: number
+  /** Agressivité : pression sur le porteur… et fautes */
+  aggression: number
 }
 
 export interface Player {
@@ -112,6 +120,22 @@ export interface MatchInstructions {
 }
 
 // ---------------------------------------------------------------------------
+// Comportements par slice (micro-décisions façon FM, 1 choix / 0,3 s / joueur)
+// ---------------------------------------------------------------------------
+
+export type AttBehavior =
+  | 'hold_position'
+  | 'run_in_behind'
+  | 'come_short'
+  | 'hold_width'
+  | 'overlap_run'
+  | 'attack_box'
+
+export type DefBehavior = 'hold_shape' | 'close_down' | 'intercept_lane' | 'cover' | 'mark_man'
+
+export type Behavior = AttBehavior | DefBehavior
+
+// ---------------------------------------------------------------------------
 // État live du match
 // ---------------------------------------------------------------------------
 
@@ -146,6 +170,12 @@ export interface LivePlayer {
   stats: PlayerStats
   warned40: boolean
   warned20: boolean
+  /** comportement choisi au dernier slice */
+  behavior: Behavior
+  /** cartons jaunes reçus (2 = exclusion) */
+  yellowCards: number
+  /** exclu (rouge) : reste dans la compo pour garder les postes, mais plus sur le terrain */
+  sentOff: boolean
 }
 
 export interface BallTransit {
@@ -164,6 +194,8 @@ export interface BallTransit {
   assistCandidateId?: string
   /** Passe vers un récepteur hors-jeu : coup franc à la défense à l'arrivée */
   offside?: boolean
+  /** Le tir est un penalty (message dédié à la résolution) */
+  fromPenalty?: boolean
 }
 
 export interface BallState {
@@ -185,6 +217,8 @@ export type MatchEventType =
   | 'interception'
   | 'foul'
   | 'yellow_card'
+  | 'red_card'
+  | 'penalty'
   | 'corner'
   | 'goal_kick'
   | 'offside'
@@ -213,7 +247,9 @@ export interface TeamMatchStats {
   corners: number
   fouls: number
   yellowCards: number
+  redCards: number
   offsides: number
+  penalties: number
   passes: number
   passesOk: number
 }
@@ -235,6 +271,8 @@ export interface MatchState {
   phase: MatchPhase
   /** Temps additionnel 2e mi-temps en secondes de jeu */
   addedTimeSec: number
+  /** Personnalité de l'arbitre : module fautes sifflées et cartons (0,8 – 1,3) */
+  refereeStrictness: number
   score: Record<Side, number>
   ball: BallState
   players: Record<string, LivePlayer>

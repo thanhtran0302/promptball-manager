@@ -238,6 +238,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
             <ul className="stamina-list">
               {st.home.lineup.map((id) => {
                 const lp = st.players[id]
+                if (!lp.onPitch && lp.sentOff) return null // exclu
                 const p = userTeam.players.find((pl) => pl.id === id)!
                 return (
                   <li key={id}>
@@ -286,8 +287,10 @@ function StatsPanel({ engine, userTeam, opponent }: { engine: MatchEngine; userT
     { label: 'Passes (réussies)', home: `${st.home.stats.passes} (${st.home.stats.passesOk})`, away: `${st.away.stats.passes} (${st.away.stats.passesOk})` },
     { label: 'Corners', home: st.home.stats.corners, away: st.away.stats.corners },
     { label: 'Hors-jeu', home: st.home.stats.offsides, away: st.away.stats.offsides },
+    { label: 'Penalties', home: st.home.stats.penalties, away: st.away.stats.penalties },
     { label: 'Fautes', home: st.home.stats.fouls, away: st.away.stats.fouls },
     { label: 'Cartons jaunes', home: st.home.stats.yellowCards, away: st.away.stats.yellowCards },
+    { label: 'Cartons rouges', home: st.home.stats.redCards, away: st.away.stats.redCards },
   ]
   return (
     <section className="panel">

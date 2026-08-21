@@ -15,6 +15,10 @@ const ATTRS: { key: keyof Player['attributes']; label: string; short: string }[]
   { key: 'shooting', label: 'Tir', short: 'TIR' },
   { key: 'tackling', label: 'Tacle', short: 'TAC' },
   { key: 'agility', label: 'Vivacité', short: 'VIV' },
+  { key: 'decisions', label: 'Décisions', short: 'DÉC' },
+  { key: 'vision', label: 'Vision', short: 'VIS' },
+  { key: 'composure', label: 'Sang-froid', short: 'SAN' },
+  { key: 'aggression', label: 'Agressivité', short: 'AGR' },
 ]
 
 function PlayerCard({ player, accent }: { player: Player; accent: string }) {
