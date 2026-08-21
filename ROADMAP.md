@@ -61,11 +61,14 @@ Chaque item doit passer le sim-bench sans casser les bornes existantes.
       enfin la tactique « deux attaquants + centres »
 - [ ] Critère : centres tentés/match 15-25, tête = 20-30 % des buts (réel)
 
-### 1.2 Rôles par poste (le plus grand saut tactique)
-- [ ] 4-5 rôles par ligne (sentinelle, relayeur, meneur reculé, piston, ailier inversé,
-      faux 9, buteur de surface, défenseur-relanceur…)
+### 1.2 Rôles par poste × devoirs (le plus grand saut tactique)
+- [ ] 4-6 rôles par ligne (sentinelle, relayeur, meneur reculé, piston, piston inversé,
+      ailier inversé, faux 9, buteur de surface, défenseur-relanceur, libéro…)
 - [ ] Chaque rôle = un jeu de pondérations de slices + cibles de position
-- [ ] Intégré au contrat d'instructions (promptable : « Delcourt en meneur reculé »)
+- [ ] **Devoirs** à la FM (défensif / support / offensif) sur chaque rôle →
+      5 rôles × 3 devoirs par poste = des dizaines de combinaisons par ligne
+- [ ] Intégré au contrat d'instructions (promptable : « Delcourt en meneur reculé,
+      Ferreira sentinelle avec devoir défensif »)
 - [ ] Éditeur de rôle sur le terrain de composition
 
 ### 1.3 Phases arrêtées jouées
@@ -99,6 +102,51 @@ Chaque item doit passer le sim-bench sans casser les bornes existantes.
 - [ ] 16,5 → 10-12 km/joueur (possessions plus longues, temps morts réels)
 - [ ] Profils de distance par poste (latéraux > 11 km, DC ~9,5, BU ~10)
 - [ ] Sprint < 10 % du temps de course (détectable : ratio vitesse/effort)
+
+### 1.8 Vocabulaire tactique étendu 🎨 *(la créativité)*
+Objectif : que deux prompts tactiques différents produisent **deux matchs visiblement
+et statistiquement différents**. Tout passe par le contrat d'instructions (promptable).
+
+**Instructions d'équipe :**
+- [ ] Déclencheur de pressing (camp propre / milieu / camp adverse)
+- [ ] **Contre-pressing immédiat** (règle des 5 s après perte) vs repli en bloc
+- [ ] **Piège au hors-jeu** (la ligne monte d'un bloc sur le passe)
+- [ ] Surcharge d'un côté (overload) + inversion de jeu
+- [ ] Gestion du temps de fin de match (time-wasting)
+- [ ] Hauteur/largeur/tempo différents en construction vs phase finale
+
+**Instructions individuelles (~20 au total) :**
+- [ ] Appel en profondeur, une-deux, plus/moins de dribbles, passes risquées
+- [ ] Rester haut (défenseur), décrocher dans l'axe (ailier)
+- [ ] Marquage au départ du jeu, fermer le pied fort de l'adversaire
+- [ ] « Ne tire pas » / « tire de loin » pour les profiles spécialisés
+- [ ] Instructions **contre un adversaire précis** (fermer Diallo côté droit…)
+
+**Critère d'acceptation (l'empreinte tactique)** : au sim-bench, chaque style présumé
+distinct doit produire une empreinte statistique distincte sur au moins 3 colonnes
+(ex. tiki-taka : possession 62 %+ et passes courtes ; route one : 60 %+ de longues
+balles et duels aériens ; gegenpress : récupérations dans le camp adverse).
+
+### 1.9 Formations libres et asymétriques
+- [ ] Éditeur de positions libres : glisser chaque poste où on veut sur le terrain
+- [ ] Formations asymétriques (4-2-3-1 penché, 3-2-4-1, milieu en losange)
+- [ ] Garder la compatibilité avec le contrat `lineup` et les rôles
+- [ ] Bibliothèque communautaire de formations (import/export JSON)
+
+### 1.10 Plans de match et automatismes 🤖
+- [ ] **Plans de match multi-étapes** : « début prudent ; si mené à la 60', passe en
+      4-2-4 ; si rouge reçu, 5-4-0 » — promptables et éditables avant match
+- [ ] Déclencheurs : score, minute, carton, fatigue d'un joueur, adversaire qui change
+- [ ] L'IA adverse a aussi des plans (coach avec répertoire de scénarios)
+- [ ] Vérification pré-match du plan (le coach LLM avertit des incohérences)
+
+### 1.11 Styles présets (bibliothèque promptable)
+- [ ] 8-10 styles historiques comme points de départ modifiables : tiki-taka,
+      gegenpressing, catenaccio, bus parking + contres, route one, jeu sur les ailes,
+      total football, pressing tout-terrain
+- [ ] Chaque préset = un jeu complet d'instructions + rôles suggérés
+- [ ] Promptable en une phrase (« joue en gegenpressing comme Liverpool ») puis
+      affinable (« mais avec Lambert qui reste en couverture »)
 
 ## Phase 2 — Saison & compétitions 🏆
 
@@ -143,7 +191,8 @@ Chaque item doit passer le sim-bench sans casser les bornes existantes.
 
 - [ ] Assistant coach conversationnel avec mémoire (contexte du club, des matchs,
       des joueurs) — discuter tactique comme avec un vrai adjoint
-- [ ] Instructions conditionnelles : « si on mène après 70', bloc bas + gestion »
+- [ ] **Plans de match** : voir 1.10 — la couche conversationnelle au-dessus des
+      automatismes (« propose-moi un plan pour battre le bloc bas de demain »)
 - [ ] Négociations par prompting (transferts, contrats, salaires)
 - [ ] Conférences de presse et entretiens individuels (effet sur le moral)
 - [ ] Requêtes en langage naturel sur les données : « montre-moi l'xG de Delcourt
@@ -194,13 +243,13 @@ traduction EN, README bilingue.
 | v0.1 | MVP : match sandbox, prompting, vue 2D | ✅ |
 | v0.2 | Réalisme : pressing, transitions, hors-jeu, lisibilité | ✅ |
 | v0.3 | Slices FM, discipline complète, physique d'effort | ✅ |
-| v0.4 | Phase 0 + jeu aérien (1.1) + rôles par poste (1.2) | ⬜ |
-| v0.5 | Phases arrêtées + intelligence individuelle | ⬜ |
-| v0.6 | Championnat + moteur instantané (Phase 2 cœur) | ⬜ |
-| v0.7 | Transferts, entraînement, staff (Phase 3 cœur) | ⬜ |
-| v0.8 | Analyses + mode temps forts | ⬜ |
-| v0.9 | Prompting avancé (Phase 5) | ⬜ |
-| v1.0 | Une saison complète, jouable, stable, documentée | ⬜ |
+| v0.4 | Phase 0 + jeu aérien (1.1) + rôles & devoirs (1.2) | ⬜ |
+| v0.5 | Vocabulaire tactique étendu + formations libres + plans de match (1.8-1.11) | ⬜ |
+| v0.6 | Phases arrêtées + intelligence individuelle (1.3-1.4) | ⬜ |
+| v0.7 | Championnat + moteur instantané (Phase 2 cœur) | ⬜ |
+| v0.8 | Transferts, entraînement, staff (Phase 3 cœur) | ⬜ |
+| v0.9 | Analyses + mode temps forts | ⬜ |
+| v1.0 | Prompting avancé + une saison complète, jouable, stable, documentée | ⬜ |
 
 *Les estimations sont volontairement en jalons de contenu, pas en semaines : c'est un
 projet open source, le rythme est celui des contributeurs.*
