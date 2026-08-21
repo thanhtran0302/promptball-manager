@@ -223,6 +223,7 @@ export type MatchEventType =
   | 'penalty'
   | 'corner'
   | 'goal_kick'
+  | 'throw_in'
   | 'offside'
   | 'stamina_low'
   | 'sub'

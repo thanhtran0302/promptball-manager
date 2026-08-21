@@ -897,7 +897,8 @@ p.errors {
 }
 
 .ev-goal_kick,
-.ev-corner {
+.ev-corner,
+.ev-throw_in {
   color: var(--muted);
 }
 

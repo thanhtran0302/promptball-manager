@@ -97,6 +97,8 @@ export class MatchEngine {
   private restartExemptUntilTick = 0
   /** cible issue du dernier slice (micro-décision), en coordonnées terrain */
   private sliceTargets = new Map<string, { x: number; y: number }>()
+  /** dernier camp à avoir touché le ballon (sorties de balle) */
+  private lastTouchSide: Side | null = null
   /** dernier camp en possession, pour invalider les slices au changement de camp */
   private lastSlicePossession: Side | null = null
 
@@ -268,6 +270,7 @@ export class MatchEngine {
     st.ball.prevY = st.ball.y
 
     if (st.possession) st[st.possession].stats.possessionTicks++
+    if (st.ball.carrierId) this.lastTouchSide = st.players[st.ball.carrierId].side
 
     this.updateBall()
 
@@ -310,12 +313,104 @@ export class MatchEngine {
       return
     }
     const p = clamp((st.tick - t.startTick) / Math.max(t.endTick - t.startTick, 1), 0, 1)
+    // course au ballon « homing » : la cible suit le joueur qui la cherche,
+    // sinon la balle se téléporte vers lui à l'arrivée
+    if (t.kind === 'clearance' && t.intendedReceiverId) {
+      const r = st.players[t.intendedReceiverId]
+      if (r && r.onPitch) {
+        t.toX = r.x
+        t.toY = r.y
+      }
+    }
     st.ball.x = t.fromX + (t.toX - t.fromX) * p
     st.ball.y = t.fromY + (t.toY - t.fromY) * p
     if (st.tick >= t.endTick) {
       st.ball.transit = null
       this.resolveArrival(t)
+      return
     }
+    this.checkOutOfBounds()
+  }
+
+  /**
+   * Sorties de balle : touches sur les lignes de touche, corner ou six
+   * mètres sur les lignes de but (selon le dernier camp à avoir touché le
+   * ballon). Les tirs sont exclus : leur sortie est résolue à l'arrivée.
+   */
+  private checkOutOfBounds() {
+    const st = this.state
+    const t = st.ball.transit
+    if (!t || t.kind === 'shot') return
+    const M = 0.4
+    const outY = st.ball.y < M || st.ball.y > PITCH.W - M
+    const outX = st.ball.x < M || st.ball.x > PITCH.L - M
+    if (!outY && !outX) return
+    const last = this.lastTouchSide ?? st.possession ?? 'home'
+    const other: Side = last === 'home' ? 'away' : 'home'
+
+    if (outY) {
+      // touche pour le camp qui n'a pas touché le ballon en dernier
+      this.throwIn(other, clamp(st.ball.x, 2, PITCH.L - 2), st.ball.y < M ? 0.6 : PITCH.W - 0.6)
+      return
+    }
+    // ligne de but : dernier touché défenseur → corner ; attaquant → six mètres
+    const defSide: Side = st.ball.x < M ? 'home' : 'away'
+    if (last === defSide) {
+      this.tms(other).stats.corners++
+      this.giveCorner(other)
+      this.log('corner', `Corner pour ${this.tms(other).team.short}.`, other)
+    } else {
+      this.goalKickRestart(defSide)
+    }
+  }
+
+  /** Touche : le plus proche vient prendre la balle sur la ligne. */
+  private throwIn(side: Side, x: number, y: number) {
+    const st = this.state
+    const taker = this.nearestTo(x, y, side)
+    if (!taker) return
+    st.ball.transit = null
+    taker.x = clamp(x, 1, PITCH.L - 1)
+    taker.y = clamp(y, 1, PITCH.W - 1)
+    taker.prevX = taker.x
+    taker.prevY = taker.y
+    st.ball.x = taker.x
+    st.ball.y = taker.y
+    st.ball.prevX = taker.x
+    st.ball.prevY = taker.y
+    st.ball.carrierId = taker.id
+    st.possession = side
+    this.lastTouchSide = side
+    taker.stats.touches++
+    this.freezeUntilTick = st.tick + 10
+    this.restartExemptUntilTick = st.tick + 40
+    this.nextDecisionTick = st.tick + 12
+    this.lastPasserId = null
+    this.log('throw_in', `Touche pour ${this.tms(side).team.short} — ${this.nameOf(taker.id)}.`, side, taker.id, x, y)
+  }
+
+  /** Six mètres (balle sortie en touche de but) : remise en jeu visible. */
+  private goalKickRestart(defSide: Side) {
+    const st = this.state
+    const keeper = this.keeperOf(defSide)
+    const spot = this.toPitch(defSide, 0.06, 0.5)
+    st.ball.transit = {
+      fromX: st.ball.x,
+      fromY: st.ball.y,
+      toX: spot.x,
+      toY: spot.y,
+      startTick: st.tick,
+      endTick: st.tick + 8,
+      kind: 'clearance',
+      intendedReceiverId: keeper?.id,
+      success: true,
+    }
+    st.possession = defSide
+    this.lastTouchSide = defSide
+    this.freezeUntilTick = st.tick + 16
+    this.restartExemptUntilTick = st.tick + 45
+    this.nextDecisionTick = st.tick + 20
+    this.log('goal_kick', `Six mètres pour ${this.tms(defSide).team.short}.`, defSide, undefined, spot.x, spot.y)
   }
 
   private resolveArrival(t: BallTransit) {
@@ -353,6 +448,7 @@ export class MatchEngine {
       const inter = st.players[t.interceptedById]
       st.ball.carrierId = inter.id
       st.possession = inter.side
+      this.lastTouchSide = inter.side
       inter.stats.touches++
       inter.stats.interceptions++
       this.bumpRating(inter.id, 0.2)
@@ -363,11 +459,31 @@ export class MatchEngine {
     }
     const receiver = t.intendedReceiverId ? st.players[t.intendedReceiverId] : null
     if (t.success && receiver && receiver.onPitch) {
-      st.ball.carrierId = receiver.id
-      receiver.stats.touches++
       st.possession = receiver.side
-      this.lastPasserId = t.kind === 'pass' ? this.lastKicker : null
-      this.nextDecisionTick = st.tick + 4
+      this.lastTouchSide = receiver.side
+      const dArr = dist(receiver.x, receiver.y, t.toX, t.toY)
+      if (dArr > 1.8) {
+        // le receveur va chercher la balle au point de chute (pas de téléportation)
+        const dur = Math.max(3, Math.round(dArr / 6 / TICK_SEC))
+        st.ball.carrierId = null
+        st.ball.transit = {
+          fromX: t.toX,
+          fromY: t.toY,
+          toX: receiver.x,
+          toY: receiver.y,
+          startTick: st.tick,
+          endTick: st.tick + dur,
+          kind: 'clearance',
+          intendedReceiverId: receiver.id,
+          success: true,
+        }
+        this.nextDecisionTick = st.tick + dur + 4
+      } else {
+        st.ball.carrierId = receiver.id
+        receiver.stats.touches++
+        this.lastPasserId = t.kind === 'pass' ? this.lastKicker : null
+        this.nextDecisionTick = st.tick + 4
+      }
       return
     }
     // balle perdue : le plus proche court dessus (plus de téléportation)
@@ -375,6 +491,7 @@ export class MatchEngine {
     if (winner) {
       const changed = st.possession !== winner.side
       st.possession = winner.side
+      this.lastTouchSide = winner.side
       const d = dist(winner.x, winner.y, t.toX, t.toY)
       if (d > 2) {
         // balle flottante : le récupéreur doit d'abord la course au ballon
@@ -545,6 +662,7 @@ export class MatchEngine {
       taker.y = y
       st.ball.carrierId = taker.id
       st.possession = side
+      this.lastTouchSide = side
       st.ball.x = x
       st.ball.y = y
       this.freezeUntilTick = st.tick + 10
@@ -680,6 +798,7 @@ export class MatchEngine {
     this.nextDecisionTick = st.tick + 26
     this.lastPasserId = null
     this.lastKicker = null
+    this.lastTouchSide = attSide
   }
 
   private nearestTo(x: number, y: number, side?: Side): LivePlayer | null {
@@ -824,12 +943,27 @@ export class MatchEngine {
 
     const success = this.rng.chance(prob)
     const offside = this.checkOffside(carrier.side, receiver)
+    this.lastTouchSide = carrier.side
 
     // interception sur la trajectoire : un adversaire sur la ligne de passe
     // peut couper le ballon (les longs ballons passent au-dessus de la
     // première ligne — approximation de l'arc sans axe z)
-    const toX = clamp(receiver.x + (success ? this.rng.range(-2, 2) * 0.4 : this.rng.range(-2, 2) * 3), 1, PITCH.L - 1)
-    const toY = clamp(receiver.y + (success ? this.rng.range(-2, 2) * 0.4 : this.rng.range(-2, 2) * 3), 1, PITCH.W - 1)
+    let rawX = this.rng.range(-2, 2) * 0.4
+    let rawY = this.rng.range(-2, 2) * 0.4
+    if (!success) {
+      // passe ratée : la déviation pousse vers l'extérieur près des lignes
+      rawX = this.rng.range(-2, 2) * 3
+      rawY = this.rng.range(-2, 2) * 4
+      if (receiver.y < 20) rawY -= this.rng.range(4, 15)
+      else if (receiver.y > PITCH.W - 20) rawY += this.rng.range(4, 15)
+      if (receiver.x < 12) rawX -= this.rng.range(1, 5)
+      else if (receiver.x > PITCH.L - 12) rawX += this.rng.range(1, 5)
+    }
+    // une passe réussie reste dans le terrain ; une passe ratée peut sortir
+    const limX: [number, number] = success ? [1, PITCH.L - 1] : [-5, PITCH.L + 5]
+    const limY: [number, number] = success ? [1, PITCH.W - 1] : [-5, PITCH.W + 5]
+    const toX = clamp(receiver.x + rawX, limX[0], limX[1])
+    const toY = clamp(receiver.y + rawY, limY[0], limY[1])
     const linePick = this.pickLineInterceptor(carrier, toX, toY, long, targetId)
     const lineIntercepted = success && !offside && linePick !== null && this.rng.chance(linePick.prob)
 
@@ -935,6 +1069,7 @@ export class MatchEngine {
     this.tms(carrier.side).stats.shots++
     if (outcome === 'goal' || outcome === 'save') this.tms(carrier.side).stats.shotsOnTarget++
     this.bumpRating(carrier.id, outcome === 'goal' ? 0 : 0.1)
+    this.lastTouchSide = carrier.side
 
     const tx =
       outcome === 'off_target' ? goal.x + this.rng.range(-4, 4) * (goal.x === PITCH.L ? -1 : 1) : goal.x
@@ -1041,6 +1176,7 @@ export class MatchEngine {
     this.bumpRating(carrier.id, -0.05)
     st.ball.carrierId = first.id
     st.possession = first.side
+    this.lastTouchSide = first.side
     first.stats.touches++
     this.log('tackle', `Beau tacle de ${this.nameOf(first.id)} !`, oppSide, first.id)
     this.lastPasserId = null
@@ -1459,6 +1595,7 @@ export class MatchEngine {
     this.restartExemptUntilTick = st.tick + 40
     this.nextDecisionTick = st.tick + 18
     this.lastPasserId = null
+    this.lastTouchSide = kickingSide
     this.log('kickoff', `Coup d'envoi — ${this.tms(kickingSide).team.short} engage.`, kickingSide)
   }
 

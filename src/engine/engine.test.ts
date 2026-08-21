@@ -50,10 +50,11 @@ describe('MatchEngine', () => {
     expect(homeShare).toBeGreaterThan(0.2)
     expect(homeShare).toBeLessThan(0.8)
 
-    // l'endurance a baissé pour tous les joueurs ayant joué
+    // l'endurance a baissé pour tous les titulaires ayant joué la majeure partie du match
     for (const lp of Object.values(st.players)) {
-      if (!lp.onPitch && lp.stats.distance === 0) continue // jamais entrés
-      expect(lp.stamina).toBeLessThan(95)
+      const p = [...home.players, ...away.players].find((x) => x.id === lp.id)!
+      if (p.role === 'GK' || lp.stats.distance < 6000) continue
+      expect(lp.stamina).toBeLessThan(90)
       expect(lp.stamina).toBeGreaterThanOrEqual(0)
     }
 
