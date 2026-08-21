@@ -348,6 +348,19 @@ export class MatchEngine {
       )
       return
     }
+    if (t.interceptedById) {
+      // passe coupée sur la trajectoire : l'intercepteur récupère sur place
+      const inter = st.players[t.interceptedById]
+      st.ball.carrierId = inter.id
+      st.possession = inter.side
+      inter.stats.touches++
+      inter.stats.interceptions++
+      this.bumpRating(inter.id, 0.2)
+      this.log('interception', `Belle lecture ! ${this.nameOf(inter.id)} coupe la passe.`, inter.side, inter.id, inter.x, inter.y)
+      this.lastPasserId = null
+      this.nextDecisionTick = st.tick + 5
+      return
+    }
     const receiver = t.intendedReceiverId ? st.players[t.intendedReceiverId] : null
     if (t.success && receiver && receiver.onPitch) {
       st.ball.carrierId = receiver.id
@@ -728,8 +741,8 @@ export class MatchEngine {
       const offCenter = Math.abs(carrier.y - goal.y)
       const angleF = 1 - Math.min(offCenter / 28, 1) * 0.6
       const rangeF = Math.pow((25 - Math.min(dGoal, 25)) / 25, 2.2)
-      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.19
-      if (dGoal < 16) w *= 1.75 // dans la surface : on conclut l'action
+      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.22
+      if (dGoal < 16) w *= 1.85 // dans la surface : on conclut l'action
       w /= 1 + pressure * 0.3
       if (pi?.instruction === 'shoot_more') w *= 2.2
       w *= 0.7 + MENTALITY_LEVEL[ti.mentality] * 0.12
@@ -800,7 +813,7 @@ export class MatchEngine {
     const pressReceiver = this.pressureOn(targetId)
 
     let prob =
-      0.95 -
+      0.965 -
       d * (long ? 0.0048 : 0.006) -
       pressReceiver * 0.055 -
       pressPasser * 0.04 +
@@ -811,9 +824,18 @@ export class MatchEngine {
 
     const success = this.rng.chance(prob)
     const offside = this.checkOffside(carrier.side, receiver)
+
+    // interception sur la trajectoire : un adversaire sur la ligne de passe
+    // peut couper le ballon (les longs ballons passent au-dessus de la
+    // première ligne — approximation de l'arc sans axe z)
+    const toX = clamp(receiver.x + (success ? this.rng.range(-2, 2) * 0.4 : this.rng.range(-2, 2) * 3), 1, PITCH.L - 1)
+    const toY = clamp(receiver.y + (success ? this.rng.range(-2, 2) * 0.4 : this.rng.range(-2, 2) * 3), 1, PITCH.W - 1)
+    const linePick = this.pickLineInterceptor(carrier, toX, toY, long, targetId)
+    const lineIntercepted = success && !offside && linePick !== null && this.rng.chance(linePick.prob)
+
     carrier.stats.passes++
     this.tms(carrier.side).stats.passes++
-    if (success && !offside) {
+    if (success && !offside && !lineIntercepted) {
       carrier.stats.passesOk++
       this.tms(carrier.side).stats.passesOk++
       this.bumpRating(carrier.id, 0.02)
@@ -821,8 +843,6 @@ export class MatchEngine {
       this.bumpRating(carrier.id, -0.03)
     }
 
-    const noiseX = this.rng.range(-2, 2)
-    const noiseY = this.rng.range(-2, 2)
     const speed = long ? 19 : 13 // m/s
     const duration = Math.max(2, Math.round((d / speed) /TICK_SEC))
 
@@ -830,16 +850,53 @@ export class MatchEngine {
     st.ball.transit = {
       fromX: carrier.x,
       fromY: carrier.y,
-      toX: clamp(receiver.x + (success ? noiseX * 0.4 : noiseX * 3), 1, PITCH.L - 1),
-      toY: clamp(receiver.y + (success ? noiseY * 0.4 : noiseY * 3), 1, PITCH.W - 1),
+      toX: lineIntercepted ? linePick!.player.x : toX,
+      toY: lineIntercepted ? linePick!.player.y : toY,
       startTick: st.tick,
-      endTick: st.tick + duration,
+      endTick: lineIntercepted ? st.tick + Math.max(2, Math.round((dist(carrier.x, carrier.y, linePick!.player.x, linePick!.player.y) / speed) / TICK_SEC)) : st.tick + duration,
       kind: 'pass',
       intendedReceiverId: targetId,
-      success: success && !offside,
+      success: success && !offside && !lineIntercepted,
       offside,
+      interceptedById: lineIntercepted ? linePick!.player.id : undefined,
     }
-    if (success && !offside) this.lastKicker = carrier.id
+    if (success && !offside && !lineIntercepted) this.lastKicker = carrier.id
+  }
+
+  /**
+   * Cherche l'adversaire le plus dangereux sur la trajectoire d'une passe.
+   * Probabilité de coupe selon la proximité à la ligne et les attributs
+   * (vivacité, décisions) ; les longs ballons sont moins coupables (arc).
+   */
+  private pickLineInterceptor(
+    passer: LivePlayer,
+    toX: number,
+    toY: number,
+    long: boolean,
+    _receiverId: string,
+  ): { player: LivePlayer; prob: number } | null {
+    const st = this.state
+    const oppSide: Side = passer.side === 'home' ? 'away' : 'home'
+    const vx = toX - passer.x
+    const vy = toY - passer.y
+    const len2 = vx * vx + vy * vy
+    if (len2 < 4) return null
+    const reach = 1.25
+    let best: { player: LivePlayer; prob: number } | null = null
+    for (const o of Object.values(st.players)) {
+      if (!o.onPitch || o.side !== oppSide) continue
+      const t = ((o.x - passer.x) * vx + (o.y - passer.y) * vy) / len2
+      if (t < 0.12 || t > 0.88) continue // hors de la zone utile du segment
+      const px = passer.x + vx * t
+      const py = passer.y + vy * t
+      const perp = dist(o.x, o.y, px, py)
+      if (perp > reach) continue
+      const a = this.player(o.id).attributes
+      let prob = (1 - perp / reach) * (0.32 + ((a.agility + a.decisions) / 2 / 99) * 0.5)
+      if (long) prob *= 0.45 // le ballon passe au-dessus de la première ligne
+      if (prob > (best?.prob ?? 0)) best = { player: o, prob }
+    }
+    return best
   }
 
   private lastKicker: string | null = null

@@ -196,6 +196,8 @@ export interface BallTransit {
   offside?: boolean
   /** Le tir est un penalty (message dédié à la résolution) */
   fromPenalty?: boolean
+  /** Passe coupée sur la trajectoire : ce joueur récupère à l'arrivée */
+  interceptedById?: string
 }
 
 export interface BallState {

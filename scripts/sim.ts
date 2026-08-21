@@ -20,6 +20,7 @@ interface Agg {
   shots: [number, number]
   sot: [number, number]
   poss: number
+  passesOk: number
   corners: [number, number]
   offsides: [number, number]
   fouls: [number, number]
@@ -32,7 +33,7 @@ interface Agg {
 
 function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInstructions): Agg {
   const agg: Agg = {
-    goals: [0, 0], shots: [0, 0], sot: [0, 0], poss: 0, corners: [0, 0],
+    goals: [0, 0], shots: [0, 0], sot: [0, 0], poss: 0, passesOk: 0, corners: [0, 0],
     offsides: [0, 0], fouls: [0, 0], yellows: [0, 0], reds: 0, pens: 0, km: 0, goalsOver8: 0,
   }
   for (let i = 0; i < matches; i++) {
@@ -57,6 +58,8 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
     agg.sot[1] += st.away.stats.shotsOnTarget
     const totalPoss = st.home.stats.possessionTicks + st.away.stats.possessionTicks || 1
     agg.poss += (st.home.stats.possessionTicks / totalPoss) * 100
+    const totalPasses = st.home.stats.passes + st.away.stats.passes || 1
+    agg.passesOk += ((st.home.stats.passesOk + st.away.stats.passesOk) / totalPasses) * 100
     agg.corners[0] += st.home.stats.corners
     agg.corners[1] += st.away.stats.corners
     agg.offsides[0] += st.home.stats.offsides
@@ -91,6 +94,7 @@ function row(name: string, agg: Agg, n: number) {
       `| buts ${f(agg.goals[0])}-${f(agg.goals[1])}` +
       ` | tirs ${f(agg.shots[0], 1)}-${f(agg.shots[1], 1)} (cad ${f(agg.sot[0], 1)}-${f(agg.sot[1], 1)})` +
       ` | poss ${f(agg.poss, 1)}%` +
+      ` | passes ${f(agg.passesOk, 1)}%` +
       ` | HJ ${f(agg.offsides[0], 1)}-${f(agg.offsides[1], 1)}` +
       ` | CF [🟨] ${f(agg.fouls[0], 1)} [${f(agg.yellows[0], 1)}] - ${f(agg.fouls[1], 1)} [${f(agg.yellows[1], 1)}]` +
       ` | 🟥 ${f(agg.reds, 2)} | pens ${f(agg.pens, 2)}` +
