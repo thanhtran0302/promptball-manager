@@ -5,8 +5,9 @@ import { MatchEngine } from '../engine/sim'
 import { MENTALITY_LEVEL, PRESSINGS, MENTALITIES } from '../engine/instructions'
 import { TICK_SEC, type MatchInstructions, type MatchPhase, type Side } from '../engine/types'
 
-/** À ×1, 1 minute de jeu = 8 secondes réelles (match ≈ 12 min réelles). */
-export const SIM_SEC_PER_REAL_SEC = 7.5
+/** À ×1 (vitesse « normale » de spectateur), 1 minute de jeu = 12 secondes
+ *  réelles — match complet ≈ 18 min réelles. */
+export const SIM_SEC_PER_REAL_SEC = 5
 export const SPEEDS = [0.5, 1, 2, 4, 8] as const
 export type Speed = (typeof SPEEDS)[number]
 
