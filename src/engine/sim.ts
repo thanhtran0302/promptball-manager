@@ -728,7 +728,7 @@ export class MatchEngine {
       const offCenter = Math.abs(carrier.y - goal.y)
       const angleF = 1 - Math.min(offCenter / 28, 1) * 0.6
       const rangeF = Math.pow((25 - Math.min(dGoal, 25)) / 25, 2.2)
-      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.17
+      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.19
       if (dGoal < 16) w *= 1.75 // dans la surface : on conclut l'action
       w /= 1 + pressure * 0.3
       if (pi?.instruction === 'shoot_more') w *= 2.2
@@ -800,9 +800,9 @@ export class MatchEngine {
     const pressReceiver = this.pressureOn(targetId)
 
     let prob =
-      0.93 -
+      0.95 -
       d * (long ? 0.0048 : 0.006) -
-      pressReceiver * 0.07 -
+      pressReceiver * 0.055 -
       pressPasser * 0.04 +
       ((p.attributes.passing - 50) / 99) * 0.3 -
       (long ? 0.07 : 0) -
@@ -926,7 +926,7 @@ export class MatchEngine {
 
     const defP = this.player(first.id)
     let p =
-      (0.008 + (defP.attributes.tackling / 99) * 0.01) *
+      (0.006 + (defP.attributes.tackling / 99) * 0.01) *
       pressF *
       (1.15 - (carrierP.attributes.agility / 99) * 0.6) *
       (1 + support * 0.3) /
@@ -1032,15 +1032,28 @@ export class MatchEngine {
         st.ball.carrierId !== lp.id && p.role !== 'GK'
           ? this.sliceTargets.get(lp.id) ?? this.targetFor(lp)
           : this.targetFor(lp)
-      const vmax = maxSpeed(p.attributes.pace, lp.stamina)
       const d = dist(lp.x, lp.y, tgt.x, tgt.y)
+      const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina)
+      const isCarrier = st.ball.carrierId === lp.id
+      // zone morte : à son poste, on tient sa position (arrête le papillonnage)
+      const deadZone =
+        p.role === 'GK'
+          ? 0.5
+          : lp.behavior === 'close_down' || lp.behavior === 'mark_man'
+            ? 0.8 // le presseur doit arriver à portée de tacle
+            : isCarrier
+              ? 1.5
+              : 3.5
+      const effort = p.role === 'GK' ? 0.55 : this.effortFor(lp, d, isCarrier)
+      const vmax = vmaxFull * effort
       let speedRatio = 0
-      if (d > 0.05) {
-        const step = Math.min(d, vmax * TICK_SEC)
+      if (d > deadZone) {
+        const step = Math.min(d - deadZone * 0.5, vmax * TICK_SEC)
         lp.x += ((tgt.x - lp.x) / d) * step
         lp.y += ((tgt.y - lp.y) / d) * step
         lp.stats.distance += step
-        speedRatio = step / (vmax * TICK_SEC)
+        // rapporté à la vitesse max RÉELLE : courir à 60 % coûte moins cher
+        speedRatio = step / (vmaxFull * TICK_SEC)
       }
 
       const tms = this.tms(lp.side)
@@ -1274,6 +1287,37 @@ export class MatchEngine {
       tx = Math.min(tx, line + 0.025)
     }
     return { tx: p.role === 'GK' ? 0.03 : tx, ty }
+  }
+
+  /**
+   * Gestion de l'effort : un joueur ne sprinte pas en permanence.
+   * Repositionnement tactique = course légère, action urgente = sprint,
+   * cible à portée = on ajuste le pas. Le porteur avance avec le ballon
+   * sous contrôle. Cible réaliste : 9-12 km parcourus par match.
+   */
+  private effortFor(lp: LivePlayer, distToTarget: number, isCarrier: boolean): number {
+    let e: number
+    switch (lp.behavior) {
+      case 'close_down':
+      case 'run_in_behind':
+      case 'overlap_run':
+      case 'attack_box':
+        e = 1 // action urgente : sprint
+        break
+      case 'come_short':
+      case 'hold_width':
+      case 'intercept_lane':
+      case 'cover':
+      case 'mark_man':
+        e = 0.85
+        break
+      default:
+        e = 0.55 // repositionnement : course légère
+    }
+    if (distToTarget < 2) e *= 0.45 // arrivé : on ajuste le pas
+    else if (distToTarget < 5) e *= 0.7
+    if (isCarrier) e = Math.min(e, 0.8) // balle aux pieds : vitesse contrôlée
+    return clamp(e, 0.3, 1)
   }
 
   private targetFor(lp: LivePlayer): { x: number; y: number } {

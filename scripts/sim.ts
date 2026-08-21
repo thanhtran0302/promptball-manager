@@ -26,13 +26,14 @@ interface Agg {
   yellows: [number, number]
   reds: number
   pens: number
+  km: number
   goalsOver8: number
 }
 
 function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInstructions): Agg {
   const agg: Agg = {
     goals: [0, 0], shots: [0, 0], sot: [0, 0], poss: 0, corners: [0, 0],
-    offsides: [0, 0], fouls: [0, 0], yellows: [0, 0], reds: 0, pens: 0, goalsOver8: 0,
+    offsides: [0, 0], fouls: [0, 0], yellows: [0, 0], reds: 0, pens: 0, km: 0, goalsOver8: 0,
   }
   for (let i = 0; i < matches; i++) {
     const engine = new MatchEngine({
@@ -66,6 +67,18 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
     agg.yellows[1] += st.away.stats.yellowCards
     agg.reds += st.home.stats.redCards + st.away.stats.redCards
     agg.pens += st.home.stats.penalties + st.away.stats.penalties
+    // km moyens par joueur de champ titulaire (cible réaliste : 9-12 km)
+    let kmSum = 0
+    let kmCount = 0
+    for (const tms of [st.home, st.away]) {
+      for (const id of tms.lineup) {
+        const p = tms.team.players.find((pl) => pl.id === id)
+        if (!p || p.role === 'GK') continue
+        kmSum += st.players[id].stats.distance
+        kmCount++
+      }
+    }
+    agg.km += kmSum / Math.max(kmCount, 1)
     if (st.score.home + st.score.away > 8) agg.goalsOver8++
   }
   return agg
@@ -81,6 +94,7 @@ function row(name: string, agg: Agg, n: number) {
       ` | HJ ${f(agg.offsides[0], 1)}-${f(agg.offsides[1], 1)}` +
       ` | CF [🟨] ${f(agg.fouls[0], 1)} [${f(agg.yellows[0], 1)}] - ${f(agg.fouls[1], 1)} [${f(agg.yellows[1], 1)}]` +
       ` | 🟥 ${f(agg.reds, 2)} | pens ${f(agg.pens, 2)}` +
+      ` | km/j ${f(agg.km / 1000, 1)}` +
       (agg.goalsOver8 ? ` | >8b ${agg.goalsOver8}/${n}` : ''),
   )
 }
