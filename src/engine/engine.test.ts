@@ -50,13 +50,18 @@ describe('MatchEngine', () => {
     expect(homeShare).toBeGreaterThan(0.2)
     expect(homeShare).toBeLessThan(0.8)
 
-    // l'endurance a baissé pour tous les titulaires ayant joué la majeure partie du match
+    // les titulaires sont fatigués en fin de match (chacun < 93 %, moyenne < 80 %)
+    let staminaSum = 0
+    let staminaCount = 0
     for (const lp of Object.values(st.players)) {
       const p = [...home.players, ...away.players].find((x) => x.id === lp.id)!
       if (p.role === 'GK' || lp.stats.distance < 6000) continue
-      expect(lp.stamina).toBeLessThan(90)
+      expect(lp.stamina).toBeLessThan(93)
       expect(lp.stamina).toBeGreaterThanOrEqual(0)
+      staminaSum += lp.stamina
+      staminaCount++
     }
+    expect(staminaSum / Math.max(staminaCount, 1)).toBeLessThan(80)
 
     // chaque équipe a bien 11 joueurs sur le terrain
     expect(st.home.lineup).toHaveLength(11)

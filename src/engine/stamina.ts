@@ -37,8 +37,8 @@ const TEMPO_DRAIN: Record<Tempo, number> = { lent: -0.0008, moyen: 0, rapide: 0.
 export function drainPerSecond(inp: DrainInput, endurance: number): number {
   // joueur endurant (99) → ×0.80 ; fragile (20) → ×1.4
   const enduranceMul = 1.55 - (endurance / 99) * 0.75
-  let drain = 0.0012 // base
-  drain += Math.min(inp.speedRatio * inp.speedRatio, 1) * 0.0065 // déplacement
+  let drain = 0.0016 // base
+  drain += Math.min(inp.speedRatio * inp.speedRatio, 1) * 0.0072 // déplacement
   drain += PRESS_DRAIN[inp.pressing]
   drain += TEMPO_DRAIN[inp.tempo]
   if (inp.extraWork) drain += 0.009

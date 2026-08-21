@@ -24,6 +24,9 @@ export interface AttackSliceInput {
   ballTy: number
   /** ligne de hors-jeu, en espace attaquant (plafond légal) */
   offsideLineTx: number
+  /** phase lissée 0..1 : les courses offensives ne partent qu'une fois
+   *  l'équipe installée en attaque (sinon contre-transitions dévastateurs) */
+  phaseBlend: number
   minute: number
   /** score de cette équipe moins celui de l'adversaire */
   goalDiff: number
@@ -72,6 +75,8 @@ export function attackWeights(inp: AttackSliceInput): Weighted<AttBehavior>[] {
   const cautious =
     ti.mentality === 'tres_defensif' || ti.mentality === 'defensif'
   const bold = ti.mentality === 'offensif' || ti.mentality === 'tres_offensif'
+  // les courses offensives urgentes montent en puissance avec la phase
+  const runRamp = Math.max(0, Math.min(1, (inp.phaseBlend - 0.3) / 0.4))
 
   // défaut : la formule de positionnement (comportement neutre dominant)
   let holdW = 10
@@ -91,6 +96,7 @@ export function attackWeights(inp: AttackSliceInput): Weighted<AttBehavior>[] {
     if (chasing) ribW *= 1.5
     if (tired) ribW *= 0.5
     if (pi?.instruction === 'free_role') ribW *= 1.4
+    ribW *= runRamp
   }
   push('run_in_behind', ribW)
 
@@ -118,7 +124,7 @@ export function attackWeights(inp: AttackSliceInput): Weighted<AttBehavior>[] {
     if (bold) ovW *= 1.5
     if (cautious) ovW *= 0.4
     if (tired) ovW *= 0.4
-    push('overlap_run', ovW)
+    push('overlap_run', ovW * runRamp)
   }
 
   // entrée dans la surface quand le porteur est large et haut
@@ -128,7 +134,7 @@ export function attackWeights(inp: AttackSliceInput): Weighted<AttBehavior>[] {
     if (ti.mentality === 'tres_offensif') abW *= 1.4
     if (cautious) abW *= 0.5
     if (tired) abW *= 0.6
-    push('attack_box', abW)
+    push('attack_box', abW * runRamp)
   }
 
   if (pi?.instruction === 'stay_back') {

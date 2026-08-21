@@ -101,6 +101,8 @@ export class MatchEngine {
   private lastTouchSide: Side | null = null
   /** dernier camp en possession, pour invalider les slices au changement de camp */
   private lastSlicePossession: Side | null = null
+  /** dernier porteur, pour invalider sa cible hors-ballon */
+  private lastCarrierId: string | null = null
 
   constructor(opts: MatchOptions) {
     this.rng = new Rng(opts.seed)
@@ -807,8 +809,16 @@ export class MatchEngine {
       (lp) => lp.onPitch && (side === undefined || lp.side === side),
     )
     if (!cands.length) return null
-    const weights = cands.map((lp) => 1 / Math.pow(0.5 + dist(lp.x, lp.y, x, y), 2))
-    return cands[this.rng.weighted(weights)]
+    // tri par distance réelle : seuls les joueurs réellement au point de
+    // chute peuvent prendre la balle (fini la balle magnétique vers un
+    // joueur éloigné) ; sinon le plus proche court dessus
+    const sorted = cands
+      .map((lp) => ({ lp, d: dist(lp.x, lp.y, x, y) }))
+      .sort((a, b) => a.d - b.d)
+    const close = sorted.filter((s) => s.d <= 2.5)
+    if (close.length === 0) return sorted[0].lp
+    const weights = close.map((s) => 1 / Math.pow(0.3 + s.d, 2))
+    return close[this.rng.weighted(weights)].lp
   }
 
   private pressureOn(playerId: string): number {
@@ -860,7 +870,7 @@ export class MatchEngine {
       const offCenter = Math.abs(carrier.y - goal.y)
       const angleF = 1 - Math.min(offCenter / 28, 1) * 0.6
       const rangeF = Math.pow((25 - Math.min(dGoal, 25)) / 25, 2.2)
-      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.22
+      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.19
       if (dGoal < 16) w *= 1.85 // dans la surface : on conclut l'action
       w /= 1 + pressure * 0.3
       if (pi?.instruction === 'shoot_more') w *= 2.2
@@ -910,12 +920,21 @@ export class MatchEngine {
       this.startShot(carrier)
     } else if (action.kind === 'pass') {
       this.startPass(carrier, action.targetId, action.long)
+    } else {
+      // dribble : le porteur avance réellement vers le but (pas d'immobilité)
+      const goal = this.attackedGoal(carrier.side)
+      const gd = Math.max(dist(carrier.x, carrier.y, goal.x, goal.y), 1)
+      const adv = this.rng.range(2, 3.5)
+      this.sliceTargets.set(carrier.id, {
+        x: clamp(carrier.x + ((goal.x - carrier.x) / gd) * adv + this.rng.range(-1.5, 1.5), 0.5, PITCH.L - 0.5),
+        y: clamp(carrier.y + ((goal.y - carrier.y) / gd) * adv + this.rng.range(-1.5, 1.5), 0.5, PITCH.W - 0.5),
+      })
     }
-    // dribble : pas d'action immédiate, le porteur avance vers sa cible
 
-    // décisions un peu plus rapides dans le dernier tiers
-    let baseInterval = this.rng.range(18, 36) * TEMPO_DECISION[ti.tempo]
+    // décisions un peu plus rapides dans le dernier tiers, plus vives sous pression
+    let baseInterval = this.rng.range(16, 30) * TEMPO_DECISION[ti.tempo]
     if (dGoal < 35) baseInterval *= 0.85
+    if (pressure > 0.8) baseInterval *= 0.75
     this.nextDecisionTick = st.tick + Math.max(6, Math.round(baseInterval))
   }
 
@@ -1196,6 +1215,11 @@ export class MatchEngine {
       this.lastSlicePossession = st.possession
       this.sliceTargets.clear()
     }
+    // nouveau porteur : sa cible hors-ballon est périmée
+    if (st.ball.carrierId !== this.lastCarrierId) {
+      if (st.ball.carrierId) this.sliceTargets.delete(st.ball.carrierId)
+      this.lastCarrierId = st.ball.carrierId
+    }
 
     if (st.tick % 5 === 0) {
       for (const lp of Object.values(st.players)) {
@@ -1222,8 +1246,8 @@ export class MatchEngine {
       }
 
       const tgt =
-        st.ball.carrierId !== lp.id && p.role !== 'GK'
-          ? this.sliceTargets.get(lp.id) ?? this.targetFor(lp)
+        p.role !== 'GK' && this.sliceTargets.has(lp.id)
+          ? this.sliceTargets.get(lp.id)!
           : this.targetFor(lp)
       const d = dist(lp.x, lp.y, tgt.x, tgt.y)
       const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina)
@@ -1336,7 +1360,10 @@ export class MatchEngine {
     const tms = this.tms(lp.side)
     const p = this.player(lp.id)
     if (p.role === 'GK') return
-    const ab = clamp(this.phase.get(lp.side) ?? 0.5, 0, 1)
+    // la famille de comportements suit la possession RÉELLE, pas la phase
+    // lissée — sinon les duels qui clignotent devant le but figent tout le
+    // monde en zone de transition et personne ne presse plus
+    const attackingNow = st.possession === lp.side
     const base = this.formulaTargetTs(lp)
     const ballTs = this.toTeamSpace(lp.side, st.ball.x, st.ball.y)
     const pTs = this.toTeamSpace(lp.side, lp.x, lp.y)
@@ -1345,7 +1372,7 @@ export class MatchEngine {
     const slotIdx = tms.lineup.indexOf(lp.id)
     const slot = slots[slotIdx >= 0 ? slotIdx : 0]
 
-    if (ab > 0.55) {
+    if (attackingNow) {
       const inp: AttackSliceInput = {
         attrs: p.attributes,
         role: slot.role,
@@ -1356,6 +1383,7 @@ export class MatchEngine {
         ballTx: ballTs.tx,
         ballTy: ballTs.ty,
         offsideLineTx: this.offsideLine.get(lp.side) ?? 0.9,
+        phaseBlend: clamp(this.phase.get(lp.side) ?? 0.5, 0, 1),
         minute: this.minute(),
         goalDiff:
           st.score[lp.side] - st.score[lp.side === 'home' ? 'away' : 'home'],
@@ -1370,7 +1398,7 @@ export class MatchEngine {
         x: clamp(pos.x, 0.5, PITCH.L - 0.5),
         y: clamp(pos.y, 0.5, PITCH.W - 0.5),
       })
-    } else if (ab < 0.45) {
+    } else {
       // plus proche attaquant adverse (espace défenseur)
       const oppSide: Side = lp.side === 'home' ? 'away' : 'home'
       let nearest: { tx: number; ty: number } | null = null
