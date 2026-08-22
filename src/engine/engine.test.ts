@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MatchEngine } from './sim'
 import { defaultInstructions, validateInstructions } from './instructions'
+import { attackTarget, type AttackSliceInput } from './slices'
 import { TEAMS } from '../data/teams'
 
 const [home, away] = TEAMS
@@ -255,6 +256,54 @@ describe('MatchEngine', () => {
     const ratio = sot / Math.max(shots, 1)
     expect(ratio).toBeGreaterThan(0.2)
     expect(ratio).toBeLessThan(0.6)
+  })
+
+  // Régression : le hors-jeu était géométriquement inatteignable. L'appel en
+  // profondeur visait `ligne × facteur` avec un facteur < 1, donc toujours EN
+  // DEÇÀ de la ligne, quand l'arbitre siffle au-delà de ligne + 0,03. Sur
+  // 72 équipes-matchs, l'écart maximal atteint était de 0,0081 : zéro hors-jeu
+  // sifflé, alors que la règle est implémentée et testée par ailleurs.
+  it('siffle des hors-jeu à un taux plausible (6 matchs)', () => {
+    // 3 matchs sur 12 n'ont aucun hors-jeu : la mesure n'a de sens qu'agrégée.
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let offsides = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      offsides += engine.state.home.stats.offsides + engine.state.away.stats.offsides
+    }
+    const perTeamPerMatch = offsides / seeds.length / 2
+
+    // borne basse : la règle doit produire des décisions, pas rester décorative
+    expect(perTeamPerMatch).toBeGreaterThan(0.15)
+    // borne haute : un piège du hors-jeu permanent casserait le jeu
+    expect(perTeamPerMatch).toBeLessThan(1.6)
+  })
+
+  it("un appel mal minuté franchit la ligne, un appel bien minuté reste en deçà", () => {
+    // Le cœur du bug, isolé de la simulation : c'est le SENS du dépassement.
+    const line = 0.75
+    const inp = {
+      ...({} as AttackSliceInput),
+      attrs: home.players[10].attributes,
+      role: 'AT' as const,
+      ti: defaultInstructions().team,
+      playerTx: 0.7,
+      playerTy: 0.5,
+      ballTx: 0.6,
+      ballTy: 0.5,
+      offsideLineTx: line,
+      phaseBlend: 1,
+      minute: 30,
+      goalDiff: 0,
+      stamina: 100,
+    }
+    const OFFSIDE_MARGIN = 0.03 // seuil de checkOffside dans sim.ts
+
+    const mistimed = attackTarget('run_in_behind', { ...inp, runGamble: true }, 0.7, 0.5)
+    expect(mistimed.tx).toBeGreaterThan(line + OFFSIDE_MARGIN)
+
+    const timed = attackTarget('run_in_behind', { ...inp, runGamble: false }, 0.7, 0.5)
+    expect(timed.tx).toBeLessThan(line)
   })
 })
 
