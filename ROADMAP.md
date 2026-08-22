@@ -26,7 +26,7 @@
 - ✅ 16 attributs joueur (dont 4 mentaux), endurance, notes individuelles
 - ✅ Prompting avant-match + pause tactique (OpenAI / Grok / OpenRouter), coach,
   mode démo, éditeur manuel, composition sur terrain cliquable
-- ✅ Vue 2D annotée, stats live, post-match, sim-bench `--phase-sweep`, 16 tests
+- ✅ Vue 2D annotée, stats live, post-match, sim-bench `--sweep` / `--check`, 19 tests
 - 📊 Calibration : 2,6 buts/match, 84 % de passes, 15 touches, 7 corners,
   16,5 km/joueur (cible 10-12), ~0,2 rouge, ~0,3 penalty
 
@@ -204,8 +204,8 @@ attributs (doc), golden prompts pour le corpus F, thème clair, traduction EN.
 
 **Règles d'or d'une PR** :
 1. `tsc` + tests verts ;
-2. `npm run sim -- 30` : aucune borne du cœur cassée ;
-3. dial tactique modifié → `--phase-sweep` avant/après dans la PR ;
+2. `npm run sim -- 30 --check` : aucune borne du cœur cassée (sortie non nulle sinon) ;
+3. dial tactique modifié → `--sweep` avant/après dans la PR ;
 4. tout comportement joueur passe par les slices ;
 5. toute instruction passe par le schéma zod (contrat LLM/éditeur/moteur).
 

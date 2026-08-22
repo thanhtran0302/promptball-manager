@@ -1,7 +1,10 @@
 // Calibration et bench du moteur : simule N matchs et imprime les stats
 // moyennes. Mode sweep (npm run sim -- 20 --sweep) : un réglage tactique à
 // la fois contre un adversaire neutre — chaque dial doit bouger sa colonne.
-// Usage : npm run sim [matchs] [--sweep]
+// Mode check (npm run sim -- 30 --check) : confronte les mesures aux bornes du
+// Pilier A et sort en code non nul si l'une est franchie — c'est la règle d'or
+// n°2 d'une PR, rendue exécutable.
+// Usage : npm run sim [matchs] [--sweep|--check]
 
 import { MatchEngine } from '../src/engine/sim'
 import { defaultInstructions } from '../src/engine/instructions'
@@ -11,6 +14,7 @@ import { TEAMS } from '../src/data/teams'
 const args = process.argv.slice(2)
 const N = Number(args.find((a) => !a.startsWith('--')) ?? 20)
 const SWEEP = args.includes('--sweep')
+const CHECK = args.includes('--check')
 
 const [home, away] = TEAMS
 const neutral = defaultInstructions()
@@ -29,12 +33,18 @@ interface Agg {
   pens: number
   km: number
   goalsOver8: number
+  sprintTicks: number
+  runningTicks: number
+  deadTicks: number
+  totalTicks: number
+  setPieceGoals: number
 }
 
 function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInstructions): Agg {
   const agg: Agg = {
     goals: [0, 0], shots: [0, 0], sot: [0, 0], poss: 0, passesOk: 0, corners: [0, 0],
     offsides: [0, 0], fouls: [0, 0], yellows: [0, 0], reds: 0, pens: 0, km: 0, goalsOver8: 0,
+    sprintTicks: 0, runningTicks: 0, deadTicks: 0, totalTicks: 0, setPieceGoals: 0,
   }
   for (let i = 0; i < matches; i++) {
     const engine = new MatchEngine({
@@ -82,9 +92,26 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
       }
     }
     agg.km += kmSum / Math.max(kmCount, 1)
+    // sprint : agrégé sur tous les joueurs de champ, gardien exclu
+    for (const tms of [st.home, st.away]) {
+      for (const id of tms.lineup) {
+        const p = tms.team.players.find((pl) => pl.id === id)
+        if (!p || p.role === 'GK') continue
+        agg.sprintTicks += st.players[id].stats.sprintTicks
+        agg.runningTicks += st.players[id].stats.runningTicks
+      }
+    }
+    agg.deadTicks += st.deadTicks
+    agg.totalTicks += st.tick
+    agg.setPieceGoals += st.home.stats.setPieceGoals + st.away.stats.setPieceGoals
     if (st.score.home + st.score.away > 8) agg.goalsOver8++
   }
   return agg
+}
+
+/** Part en pourcentage, sûre quand le dénominateur est nul. */
+function pct(num: number, den: number, d = 0): string {
+  return den > 0 ? `${((num / den) * 100).toFixed(d)}%` : 'n/a'
 }
 
 function row(name: string, agg: Agg, n: number) {
@@ -99,11 +126,76 @@ function row(name: string, agg: Agg, n: number) {
       ` | CF [🟨] ${f(agg.fouls[0], 1)} [${f(agg.yellows[0], 1)}] - ${f(agg.fouls[1], 1)} [${f(agg.yellows[1], 1)}]` +
       ` | 🟥 ${f(agg.reds, 2)} | pens ${f(agg.pens, 2)}` +
       ` | km/j ${f(agg.km / 1000, 1)}` +
+      ` | sprint ${pct(agg.sprintTicks, agg.runningTicks)}` +
+      ` | morts ${pct(agg.deadTicks, agg.totalTicks)}` +
+      ` | CPA ${pct(agg.setPieceGoals, agg.goals[0] + agg.goals[1])}` +
       (agg.goalsOver8 ? ` | >8b ${agg.goalsOver8}/${n}` : ''),
   )
 }
 
-if (SWEEP) {
+/**
+ * Les bornes du Pilier A, telles qu'écrites dans la ROADMAP. Rendre ce tableau
+ * exécutable est tout l'objet du mode --check : jusqu'ici le bench imprimait
+ * des chiffres que personne ne confrontait à quoi que ce soit.
+ */
+interface Criterion {
+  name: string
+  /** valeur mesurée, dans l'unité de la borne */
+  value: (agg: Agg, n: number) => number
+  min: number
+  max: number
+  unit: string
+}
+
+const CRITERIA: Criterion[] = [
+  { name: 'Buts / match', value: (a, n) => (a.goals[0] + a.goals[1]) / n, min: 2.5, max: 3.0, unit: '' },
+  { name: 'Tirs / équipe', value: (a, n) => (a.shots[0] + a.shots[1]) / (2 * n), min: 11, max: 15, unit: '' },
+  { name: 'Tirs cadrés', value: (a) => ((a.sot[0] + a.sot[1]) / Math.max(a.shots[0] + a.shots[1], 1)) * 100, min: 35, max: 42, unit: '%' },
+  { name: 'Passes réussies', value: (a, n) => a.passesOk / n, min: 82, max: 86, unit: '%' },
+  { name: 'Distance / joueur', value: (a, n) => a.km / n / 1000, min: 9, max: 12, unit: ' km' },
+  { name: 'Sprint / temps de course', value: (a) => (a.sprintTicks / Math.max(a.runningTicks, 1)) * 100, min: 0, max: 10, unit: '%' },
+  // la ROADMAP dit « ~30 % » : lu comme 25-35
+  { name: 'Temps morts', value: (a) => (a.deadTicks / Math.max(a.totalTicks, 1)) * 100, min: 25, max: 35, unit: '%' },
+  { name: 'Buts sur phase arrêtée', value: (a) => (a.setPieceGoals / Math.max(a.goals[0] + a.goals[1], 1)) * 100, min: 25, max: 35, unit: '%' },
+]
+
+/**
+ * Bornes connues comme franchies, avec le chantier de la ROADMAP qui les
+ * refermera. Elles s'affichent mais ne font pas échouer le run : le check reste
+ * ainsi utilisable comme garde-fou dès aujourd'hui, et retirer une ligne d'ici
+ * est ce qui matérialise l'avancement d'un chantier.
+ */
+const KNOWN_BREACHES = new Map<string, string>([
+  ['Distance / joueur', 'Pilier A — possessions réalistes (16,5 → 10-12 km)'],
+  ['Temps morts', 'Pilier A — arbitrage complet / phases arrêtées jouées'],
+  ['Buts sur phase arrêtée', 'Pilier A — phases arrêtées jouées'],
+])
+
+if (CHECK) {
+  console.log(`\n=== CHECK Pilier A (${N} matchs, neutre vs neutre) ===`)
+  const agg = run(N, structuredClone(neutral), neutral)
+  let failed = 0
+  let tolerated = 0
+  for (const c of CRITERIA) {
+    const v = c.value(agg, N)
+    const ok = v >= c.min && v <= c.max
+    const known = KNOWN_BREACHES.get(c.name)
+    const mark = ok ? '✅' : known ? '⚠️ ' : '❌'
+    if (!ok) known ? tolerated++ : failed++
+    console.log(
+      `${mark} ${c.name.padEnd(26)} ${(v.toFixed(1) + c.unit).padStart(8)}` +
+        `   cible ${c.min}-${c.max}${c.unit}` +
+        (ok ? '' : known ? `   toléré — ${known}` : '   HORS BORNES'),
+    )
+  }
+  console.log(
+    `\n${failed} borne(s) franchie(s), ${tolerated} tolérée(s) (chantier ROADMAP ouvert).`,
+  )
+  if (failed > 0) {
+    console.log("Retirez la régression, ou déplacez la borne dans KNOWN_BREACHES avec le chantier qui la porte.")
+    process.exitCode = 1
+  }
+} else if (SWEEP) {
   console.log(`\n=== PHASE-SWEEP (${N} matchs, un dial à la fois vs neutre) ===`)
   const dials: { name: string; mut: (mi: MatchInstructions) => void }[] = [
     { name: 'neutre (baseline)', mut: () => {} },

@@ -20,6 +20,8 @@ npm install
 npm run dev        # http://localhost:5173
 npm test           # tests du moteur (déterminisme, plausibilité, règles)
 npm run sim 20     # calibration : simule 20 matchs et imprime les stats moyennes
+npm run sim -- 30 --sweep   # un dial tactique à la fois vs neutre
+npm run sim -- 30 --check   # confronte les mesures aux bornes du Pilier A (sortie != 0 si franchies)
 npm run build      # build production
 ```
 

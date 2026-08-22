@@ -307,6 +307,37 @@ describe('MatchEngine', () => {
   })
 })
 
+describe('instrumentation des critères du Pilier A', () => {
+  // Un compteur débranché lit 0 sans rien signaler, et `sim --check` affiche
+  // alors « 0.0% » comme s'il avait mesuré. Ces invariants attrapent le
+  // débranchement, ce qu'une borne de calibration ne peut pas faire.
+  const engine = runFullMatch(4242)
+  const st = engine.state
+
+  it('compte du temps de course et du sprint, le sprint étant un sous-ensemble', () => {
+    const outfield = st.home.lineup
+      .map((id) => st.players[id])
+      .filter((lp) => home.players.find((p) => p.id === lp.id)!.role !== 'GK')
+
+    const running = outfield.reduce((n, lp) => n + lp.stats.runningTicks, 0)
+    const sprint = outfield.reduce((n, lp) => n + lp.stats.sprintTicks, 0)
+
+    expect(running).toBeGreaterThan(0)
+    expect(sprint).toBeGreaterThan(0)
+    expect(sprint).toBeLessThanOrEqual(running)
+  })
+
+  it('compte du temps mort, borné par la durée du match', () => {
+    expect(st.deadTicks).toBeGreaterThan(0)
+    expect(st.deadTicks).toBeLessThan(st.tick)
+  })
+
+  it("n'impute jamais plus de buts sur phase arrêtée que de buts marqués", () => {
+    expect(st.home.stats.setPieceGoals).toBeLessThanOrEqual(st.score.home)
+    expect(st.away.stats.setPieceGoals).toBeLessThanOrEqual(st.score.away)
+  })
+})
+
 describe('validateInstructions', () => {
   it('rejette un joueur inconnu', () => {
     const instr = defaultInstructions()

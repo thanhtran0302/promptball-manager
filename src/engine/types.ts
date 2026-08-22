@@ -152,6 +152,10 @@ export interface PlayerStats {
   saves: number
   /** Distance parcourue en mètres */
   distance: number
+  /** Ticks passés à courir (> SPRINT_WALK m/s) — dénominateur du ratio de sprint */
+  runningTicks: number
+  /** Ticks passés au-dessus du seuil de sprint (> SPRINT_SPEED m/s) */
+  sprintTicks: number
   rating: number
 }
 
@@ -255,6 +259,8 @@ export interface TeamMatchStats {
   penalties: number
   passes: number
   passesOk: number
+  /** Buts nés d'une phase arrêtée : corner, coup franc, touche, penalty */
+  setPieceGoals: number
 }
 
 export interface TeamMatchState {
@@ -274,6 +280,8 @@ export interface MatchState {
   phase: MatchPhase
   /** Temps additionnel 2e mi-temps en secondes de jeu */
   addedTimeSec: number
+  /** Ticks pendant lesquels le ballon n'était pas en jeu (remises en jeu) */
+  deadTicks: number
   /** Personnalité de l'arbitre : module fautes sifflées et cartons (0,8 – 1,3) */
   refereeStrictness: number
   score: Record<Side, number>
