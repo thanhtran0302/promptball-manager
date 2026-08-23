@@ -28,6 +28,7 @@ import {
   HALF_TICKS,
   PITCH,
   TICK_SEC,
+  type AttBehavior,
   type BallTransit,
   type Formation,
   type LivePlayer,
@@ -40,6 +41,13 @@ import {
   type Team,
   type TeamMatchState,
 } from './types'
+
+/**
+ * Probabilité maximale qu'un appel en profondeur soit mal minuté (joueur dont
+ * l'attribut `decisions` vaut 0) ; nulle pour un décideur parfait. C'est la
+ * seule source de hors-jeu du moteur — calibrée au sim-bench.
+ */
+const RUN_MISTIME_MAX = 0.5
 
 const HOME_GOAL = { x: 0, y: PITCH.W / 2 }
 const AWAY_GOAL = { x: PITCH.L, y: PITCH.W / 2 }
@@ -101,6 +109,14 @@ export class MatchEngine {
   private lastTouchSide: Side | null = null
   /** dernier camp en possession, pour invalider les slices au changement de camp */
   private lastSlicePossession: Side | null = null
+  /**
+   * Appels en profondeur en cours. Le comportement est retiré au sort toutes
+   * les 0,3 s : sans mémoire, un appel dure une slice et le coureur est rappelé
+   * derrière la ligne avant qu'une passe puisse lui parvenir — le hors-jeu ne
+   * peut alors jamais se produire. L'épisode fige le choix et le pari de timing
+   * pour la durée de la course.
+   */
+  private runEpisodes = new Map<string, { untilTick: number; gamble: boolean }>()
   /** dernier porteur, pour invalider sa cible hors-ballon */
   private lastCarrierId: string | null = null
 
@@ -1214,6 +1230,7 @@ export class MatchEngine {
     if (st.possession !== this.lastSlicePossession) {
       this.lastSlicePossession = st.possession
       this.sliceTargets.clear()
+      this.runEpisodes.clear() // on perd le ballon : les appels tombent
     }
     // nouveau porteur : sa cible hors-ballon est périmée
     if (st.ball.carrierId !== this.lastCarrierId) {
@@ -1258,9 +1275,14 @@ export class MatchEngine {
           ? 0.5
           : lp.behavior === 'close_down' || lp.behavior === 'mark_man'
             ? 0.8 // le presseur doit arriver à portée de tacle
-            : isCarrier
-              ? 1.5
-              : 3.5
+            : lp.behavior === 'run_in_behind'
+              ? 0.8 // un appel se joue au mètre : s'arrêter 3,5 m avant la
+              // cible revient à tenir sa position — le coureur n'atteint
+              // jamais l'épaule du défenseur, et le hors-jeu reste hors
+              // d'atteinte quel que soit le reste
+              : isCarrier
+                ? 1.5
+                : 3.5
       const effort = p.role === 'GK' ? 0.55 : this.effortFor(lp, d, isCarrier)
       const vmax = vmaxFull * effort
       let speedRatio = 0
@@ -1373,6 +1395,8 @@ export class MatchEngine {
     const slot = slots[slotIdx >= 0 ? slotIdx : 0]
 
     if (attackingNow) {
+      const running = this.runEpisodes.get(lp.id)
+      const inRun = running !== undefined && st.tick < running.untilTick
       const inp: AttackSliceInput = {
         attrs: p.attributes,
         role: slot.role,
@@ -1383,16 +1407,35 @@ export class MatchEngine {
         ballTx: ballTs.tx,
         ballTy: ballTs.ty,
         offsideLineTx: this.offsideLine.get(lp.side) ?? 0.9,
+        runGamble: inRun ? running!.gamble : false,
         phaseBlend: clamp(this.phase.get(lp.side) ?? 0.5, 0, 1),
         minute: this.minute(),
         goalDiff:
           st.score[lp.side] - st.score[lp.side === 'home' ? 'away' : 'home'],
         stamina: lp.stamina,
       }
-      const weights = attackWeights(inp)
-      const chosen = weights[this.rng.weighted(weights.map((w) => w.weight))]
-      lp.behavior = chosen.behavior
-      const t = attackTarget(chosen.behavior, inp, base.tx, base.ty)
+      let behavior: AttBehavior
+      if (inRun) {
+        // course engagée : on ne rejoue pas les dés avant la fin de l'appel
+        behavior = 'run_in_behind'
+      } else {
+        this.runEpisodes.delete(lp.id)
+        const weights = attackWeights(inp)
+        behavior = weights[this.rng.weighted(weights.map((w) => w.weight))].behavior
+        if (behavior === 'run_in_behind') {
+          // un appel s'ouvre : sa durée et son timing sont figés maintenant.
+          // Plus le joueur décide mal, plus il part tôt et se retrouve devant
+          // la ligne au moment où la passe est jouée.
+          const gamble = this.rng.chance(RUN_MISTIME_MAX * (1 - p.attributes.decisions / 99))
+          this.runEpisodes.set(lp.id, {
+            untilTick: st.tick + Math.round(this.rng.range(12, 26)),
+            gamble,
+          })
+          inp.runGamble = gamble
+        }
+      }
+      lp.behavior = behavior
+      const t = attackTarget(behavior, inp, base.tx, base.ty)
       const pos = this.toPitch(lp.side, t.tx, t.ty)
       this.sliceTargets.set(lp.id, {
         x: clamp(pos.x, 0.5, PITCH.L - 0.5),

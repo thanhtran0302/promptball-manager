@@ -24,6 +24,13 @@ export interface AttackSliceInput {
   ballTy: number
   /** ligne de hors-jeu, en espace attaquant (plafond légal) */
   offsideLineTx: number
+  /**
+   * Appel en profondeur mal minuté : le coureur s'engage DEVANT la ligne au
+   * lieu de partir de l'épaule du dernier défenseur. Tiré une fois par appel
+   * par le moteur (mémoire d'épisode), pas à chaque slice — sinon le coureur
+   * est rappelé derrière la ligne avant qu'une passe puisse lui parvenir.
+   */
+  runGamble: boolean
   /** phase lissée 0..1 : les courses offensives ne partent qu'une fois
    *  l'équipe installée en attaque (sinon contre-transitions dévastateurs) */
   phaseBlend: number
@@ -53,6 +60,19 @@ export interface Weighted<T> {
   behavior: T
   weight: number
 }
+
+/**
+ * Appel bien minuté : on part de l'épaule du dernier défenseur, légèrement en
+ * deçà de la ligne. Le moteur siffle au-delà de ligne + 0,03.
+ */
+const RUN_SHOULDER = 0.01
+
+/**
+ * Appel mal minuté : dépassement franc de la ligne, au-delà du seuil de
+ * l'arbitre. Calibré au sim-bench sur la cible 1-3 hors-jeu par équipe et par
+ * match — voir `runGamble`.
+ */
+const RUN_OVERRUN = 0.06
 
 /** Qualité de décision : réduit les choix exotiques des joueurs limités. */
 function decisionQuality(attrs: PlayerAttributes): number {
@@ -202,14 +222,20 @@ export function attackTarget(
   baseTx: number,
   baseTy: number,
 ): { tx: number; ty: number } {
-  // les mauvais décideurs partent parfois trop tôt : appels au-delà de la ligne
-  const lineRespect = inp.attrs.decisions > 70 ? 0.995 : 0.97
+  // Timing de l'appel en profondeur : l'appel bien minuté part de l'épaule du
+  // dernier défenseur, l'appel manqué s'engage au-delà de la ligne. Le
+  // dépassement est ADDITIF — un facteur multiplicatif < 1 (ancienne version)
+  // ramenait tout appel en deçà de la ligne, rendant le hors-jeu
+  // géométriquement inatteignable.
+  const runTx = inp.runGamble
+    ? inp.offsideLineTx + RUN_OVERRUN
+    : inp.offsideLineTx - RUN_SHOULDER
   switch (behavior) {
     case 'hold_position':
       return { tx: baseTx, ty: baseTy }
     case 'run_in_behind':
       return {
-        tx: Math.min(inp.offsideLineTx * lineRespect + 0.005, 0.93),
+        tx: Math.min(runTx, 0.93),
         ty: 0.5 + (inp.playerTy - 0.5) * 0.75,
       }
     case 'come_short':
