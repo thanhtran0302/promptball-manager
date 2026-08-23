@@ -58,8 +58,25 @@ describe('mapAttributes', () => {
     expect(mapAttributes(MANDREA, 'GK').technique).toBe(40)
   })
 
-  it('compose les attributs de gardien', () => {
-    expect(mapAttributes(MANDREA, 'GK').goalkeeper).toBe(63) // 0.4*70 + 0.3*55 + 0.3*60
+  it('compose les attributs de gardien, offset d\'échelle compris', () => {
+    // 0.4*70 + 0.3*55 + 0.3*60 = 62.5, moins l'offset de famille (-10).
+    expect(mapAttributes(MANDREA, 'GK').goalkeeper).toBe(53)
+  })
+
+  it("n'applique pas l'offset à une valeur de repli", () => {
+    // Un joueur de champ n'a aucun attribut de gardien : le repli vaut 15 et
+    // n'a pas d'échelle FM à corriger. Sans cette garde il tomberait à 5.
+    expect(mapAttributes(MVILA, 'MD').goalkeeper).toBe(15)
+  })
+
+  it('réaligne le rapport tireur / gardien sur celui du moteur', () => {
+    // Le moteur calcule conv = 0.26 + (shooting - goalkeeper) / 150 et a été
+    // calibré sur les équipes fictives, où ce rapport est positif. Sur les
+    // échelles FM brutes il s'inverse, et la formule décroche alors même
+    // qu'elle est relative.
+    const gk = mapAttributes(MANDREA, 'GK').goalkeeper
+    const shooter = mapAttributes({ ...MVILA, Finishing: 55, 'Long Shots': 55 }, 'AT').shooting
+    expect(shooter - gk).toBeGreaterThan(0)
   })
 
   it('neutralise les attributs de champ hérités du bloc mental du gardien', () => {

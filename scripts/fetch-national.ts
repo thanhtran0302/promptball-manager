@@ -60,6 +60,28 @@ const FALLBACK: Record<keyof PlayerAttributes, number> = {
 }
 
 /**
+ * Décalage entre familles d'attributs FM, appliqué après composition.
+ *
+ * Rien ne permet de comparer un « Reflexes 12 » à un « Finishing 12 » : chaque
+ * attribut FM a son échelle implicite, calibrée pour que le jeu fonctionne, pas
+ * pour être comparable aux autres. Mesuré sur les 425 joueurs collectés, poste
+ * par poste : les attaquants sortent à 53,4 en composite shooting, les gardiens
+ * à 56,3 en composite goalkeeper — un écart de −2,9 là où les équipes fictives,
+ * écrites à la main sur une échelle unique, affichent +6,8.
+ *
+ * Le moteur compare directement ces deux composites (`conv = 0.26 +
+ * (shooting - goalkeeper) / 150`) et a été calibré sur les +6,8 des équipes
+ * fictives. L'offset réaligne les données réelles sur cette même relation,
+ * faute de quoi la formule, pourtant relative, décroche.
+ *
+ * Valeur empirique : elle vaut ce que vaut sa mesure, et se recale avec
+ * `npm run sim -- 30 --check --real`.
+ */
+const SCALE_OFFSET: Partial<Record<keyof PlayerAttributes, number>> = {
+  goalkeeper: -10,
+}
+
+/**
  * Une fiche de gardien conserve les attributs mentaux (Anticipation,
  * Aggression…). La renormalisation ferait alors sortir `tackling` de la seule
  * Anticipation — un gardien à 70 en tacle. On force ces deux valeurs après
@@ -129,7 +151,10 @@ export function composeAttribute(
       weight += w
     }
   }
-  return weight > 0 ? clamp99(sum / weight) : FALLBACK[key]
+  // L'offset ne s'applique qu'à une valeur réellement composée : un repli
+  // n'a pas d'échelle FM à corriger.
+  if (weight === 0) return FALLBACK[key]
+  return clamp99(sum / weight + (SCALE_OFFSET[key] ?? 0))
 }
 
 export function mapAttributes(attrs: Record<string, number>, role: Role): PlayerAttributes {
