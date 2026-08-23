@@ -2,6 +2,7 @@
 // avec validation zod, un retry, et fallback mock.
 
 import { matchInstructionsSchema } from '../engine/instructions'
+import { FORMATIONS } from '../engine/types'
 import type { MatchInstructions, Team } from '../engine/types'
 import { LLMError, chatCompletion, extractJSON } from './client'
 import type { LLMSettings } from './presets'
@@ -51,7 +52,7 @@ Réponds UNIQUEMENT avec un objet JSON de la forme :
 Schéma de "instructions" :
 {
   "team": {
-    "formation": "4-4-2" | "4-3-3" | "4-2-3-1" | "3-5-2" | "5-3-2",
+    "formation": ${FORMATIONS.map((f) => `"${f}"`).join(' | ')},
     "mentality": "tres_defensif" | "defensif" | "equilibre" | "offensif" | "tres_offensif",
     "pressing": "bas" | "moyen" | "haut",
     "tempo": "lent" | "moyen" | "rapide",

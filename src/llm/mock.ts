@@ -3,15 +3,19 @@
 
 import { defaultInstructions } from '../engine/instructions'
 import { assignSlots } from '../engine/formations'
+import { FORMATIONS } from '../engine/types'
 import type {
-  Formation,
   MatchInstructions,
   PlayerInstruction,
   PlayerInstructionType,
   Team,
 } from '../engine/types'
 
-const FORMATIONS: Formation[] = ['4-4-2', '4-3-3', '4-2-3-1', '3-5-2', '5-3-2']
+/**
+ * Du libellé le plus long au plus court : sans ce tri, une formation dont le
+ * nom est préfixe d'une autre serait captée à sa place par le includes().
+ */
+const MATCHABLE = [...FORMATIONS].sort((a, b) => b.length - a.length)
 
 function findByName(team: Team, fragment: string): Team['players'][number] | undefined {
   return team.players.find((p) => {
@@ -36,7 +40,7 @@ export function mockTranslate(
   const text = normalize(prompt)
   const instr: MatchInstructions = structuredClone(current)
 
-  const formation = FORMATIONS.find((f) => text.replace(/\s/g, '').includes(f))
+  const formation = MATCHABLE.find((f) => text.replace(/\s/g, '').includes(f))
   if (formation) instr.team.formation = formation
 
   if (/(tres|très|ultra)?\s*defensi|prudent|ferme|verrou|bus|muraille/.test(text)) {

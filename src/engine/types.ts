@@ -54,7 +54,19 @@ export interface Team {
 // Instructions (le contrat unique entre LLM, éditeur manuel et moteur)
 // ---------------------------------------------------------------------------
 
-export const FORMATIONS = ['4-4-2', '4-3-3', '4-2-3-1', '3-5-2', '5-3-2'] as const
+export const FORMATIONS = [
+  '4-4-2',
+  '4-3-3',
+  '4-2-3-1',
+  '4-1-4-1',
+  '4-4-1-1',
+  '4-5-1',
+  '4-2-4',
+  '3-5-2',
+  '3-4-3',
+  '5-3-2',
+  '5-4-1',
+] as const
 export type Formation = (typeof FORMATIONS)[number]
 
 export const MENTALITIES = ['tres_defensif', 'defensif', 'equilibre', 'offensif', 'tres_offensif'] as const
