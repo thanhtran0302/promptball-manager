@@ -4,19 +4,58 @@
 // Mode check (npm run sim -- 30 --check) : confronte les mesures aux bornes du
 // Pilier A et sort en code non nul si l'une est franchie — c'est la règle d'or
 // n°2 d'une PR, rendue exécutable.
-// Usage : npm run sim [matchs] [--sweep|--check]
+// Mode real (npm run sim -- 30 --check --real) : rejoue le bench sur deux
+// vrais clubs de Ligue 3 au lieu des équipes fictives.
+// Usage : npm run sim [matchs] [--sweep|--check] [--real]
 
+import { existsSync, readFileSync } from 'node:fs'
 import { MatchEngine } from '../src/engine/sim'
 import { defaultInstructions } from '../src/engine/instructions'
-import type { MatchInstructions } from '../src/engine/types'
+import type { MatchInstructions, Team } from '../src/engine/types'
 import { TEAMS } from '../src/data/teams'
 
 const args = process.argv.slice(2)
 const N = Number(args.find((a) => !a.startsWith('--')) ?? 20)
 const SWEEP = args.includes('--sweep')
 const CHECK = args.includes('--check')
+const REAL = args.includes('--real')
 
-const [home, away] = TEAMS
+const GENERATED = 'src/data/national.generated.json'
+
+/**
+ * Équipes du bench. Par défaut les deux équipes fictives, et ce défaut compte :
+ * le bench mesure le moteur, pas les joueurs. Ses bornes n'ont de sens que
+ * mesurées sur une référence stable — les faire varier avec les effectifs
+ * rendrait impossible d'attribuer une dérive à un changement de moteur.
+ *
+ * --real rejoue les mêmes mesures sur deux vrais clubs pour observer ce que le
+ * moteur donne sur des joueurs de D3, qui passent et courent moins bien. Les
+ * chiffres obtenus ne sont alors plus comparables aux bornes du Pilier A.
+ */
+function benchTeams(): [Team, Team] {
+  if (!REAL) return [TEAMS[0], TEAMS[1]]
+  if (!existsSync(GENERATED)) {
+    console.error(`--real demande ${GENERATED} — lancer d'abord : npm run fetch:national`)
+    process.exit(1)
+  }
+  const real = JSON.parse(readFileSync(GENERATED, 'utf8')) as Team[]
+  if (real.length < 2) {
+    console.error(`${GENERATED} ne contient que ${real.length} club(s)`)
+    process.exit(1)
+  }
+  return [real[0], real[1]]
+}
+
+const [home, away] = benchTeams()
+const MATCHUP = REAL ? `${home.name} vs ${away.name}` : 'neutre vs neutre'
+
+/**
+ * Latéral gauche de l'équipe à domicile, cible des variantes d'overlap. Résolu
+ * par poste plutôt que codé en dur : sur les équipes fictives cela retombe sur
+ * h2 (Théo Lambert), et les variantes gardent un sens avec de vrais clubs.
+ */
+const overlapBack = home.players.find((p) => p.position === 'DG') ?? home.players[1]
+
 const neutral = defaultInstructions()
 
 interface Agg {
@@ -172,7 +211,13 @@ const KNOWN_BREACHES = new Map<string, string>([
 ])
 
 if (CHECK) {
-  console.log(`\n=== CHECK Pilier A (${N} matchs, neutre vs neutre) ===`)
+  console.log(`\n=== CHECK Pilier A (${N} matchs, ${MATCHUP}) ===`)
+  if (REAL) {
+    console.log(
+      'Les bornes du Pilier A ont été calibrées sur les équipes fictives : ' +
+        'les écarts ci-dessous mesurent le niveau des joueurs autant que le moteur.',
+    )
+  }
   const agg = run(N, structuredClone(neutral), neutral)
   let failed = 0
   let tolerated = 0
@@ -208,7 +253,7 @@ if (CHECK) {
     { name: 'largeur large', mut: (mi) => (mi.team.width = 'large') },
     { name: 'ligne haute', mut: (mi) => (mi.team.defensiveLine = 'haute') },
     { name: 'ligne basse', mut: (mi) => (mi.team.defensiveLine = 'basse') },
-    { name: 'overlap Lambert élevé', mut: (mi) => mi.players.push({ playerId: 'h2', instruction: 'overlap', intensity: 'elevee' }) },
+    { name: `overlap ${overlapBack.name} élevé`, mut: (mi) => mi.players.push({ playerId: overlapBack.id, instruction: 'overlap', intensity: 'elevee' }) },
   ]
   for (const dial of dials) {
     const instr = structuredClone(neutral)
@@ -216,14 +261,14 @@ if (CHECK) {
     row(dial.name, run(N, instr, neutral), N)
   }
 } else {
-  console.log(`\n=== Calibration (${N} matchs) ===`)
+  console.log(`\n=== Calibration (${N} matchs, ${MATCHUP}) ===`)
   const variants: { name: string; mut: (mi: MatchInstructions) => void }[] = [
     { name: 'neutre vs neutre', mut: () => {} },
     {
-      name: 'LUM pressing haut + tempo rapide',
+      name: `${home.short} pressing haut + tempo rapide`,
       mut: (mi) => {
         mi.team = { ...mi.team, pressing: 'haut', tempo: 'rapide', mentality: 'offensif' }
-        mi.players = [{ playerId: 'h2', instruction: 'overlap', intensity: 'elevee' }]
+        mi.players = [{ playerId: overlapBack.id, instruction: 'overlap', intensity: 'elevee' }]
       },
     },
     {
