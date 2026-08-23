@@ -4,3 +4,7 @@ dist/
 .DS_Store
 .zcode/
 *.png
+
+# Données générées depuis FMInside (script : npm run fetch:national)
+src/data/national.generated.json
+.cache/
