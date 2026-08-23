@@ -49,6 +49,22 @@ import {
  */
 const RUN_MISTIME_MAX = 0.5
 
+/**
+ * Seuils de course, en m/s. Un joueur « court » au-delà de SPRINT_WALK — c'est
+ * le dénominateur du critère « sprint / temps de course » du Pilier A — et
+ * « sprinte » au-delà de SPRINT_SPEED (25,2 km/h, la définition usuelle en
+ * analyse de match).
+ */
+const SPRINT_WALK = 2
+const SPRINT_SPEED = 7
+
+/**
+ * Durée pendant laquelle une possession reste imputable à la phase arrêtée qui
+ * l'a lancée. Au-delà, un but compte comme une action construite. La chaîne est
+ * aussi rompue par tout changement de camp.
+ */
+const SET_PIECE_CHAIN_TICKS = 150
+
 const HOME_GOAL = { x: 0, y: PITCH.W / 2 }
 const AWAY_GOAL = { x: PITCH.L, y: PITCH.W / 2 }
 
@@ -73,6 +89,8 @@ function newStats() {
     fouls: 0,
     saves: 0,
     distance: 0,
+    runningTicks: 0,
+    sprintTicks: 0,
     rating: 6,
   }
 }
@@ -117,6 +135,12 @@ export class MatchEngine {
    * pour la durée de la course.
    */
   private runEpisodes = new Map<string, { untilTick: number; gamble: boolean }>()
+  /**
+   * Possession en cours issue d'une phase arrêtée : sert à imputer les buts
+   * (critère « buts sur phase arrêtée » du Pilier A). Rompue par un changement
+   * de camp ou par l'expiration de SET_PIECE_CHAIN_TICKS.
+   */
+  private setPieceChain: { side: Side; untilTick: number } | null = null
   /** dernier porteur, pour invalider sa cible hors-ballon */
   private lastCarrierId: string | null = null
 
@@ -151,6 +175,7 @@ export class MatchEngine {
       tick: 0,
       phase: 'first_half',
       addedTimeSec: Math.round(this.rng.range(30, 180)),
+      deadTicks: 0,
       refereeStrictness: this.rng.range(0.8, 1.3),
       score: { home: 0, away: 0 },
       ball: {
@@ -194,6 +219,7 @@ export class MatchEngine {
         penalties: 0,
         passes: 0,
         passesOk: 0,
+        setPieceGoals: 0,
       },
     }
   }
@@ -286,6 +312,10 @@ export class MatchEngine {
     // mémoire des positions pour l'interpolation du rendu
     st.ball.prevX = st.ball.x
     st.ball.prevY = st.ball.y
+
+    // ballon hors jeu : le gel qui suit chaque remise en jeu est le seul temps
+    // mort modélisé — c'est la mesure du critère « temps morts » du Pilier A
+    if (st.tick < this.freezeUntilTick) st.deadTicks++
 
     if (st.possession) st[st.possession].stats.possessionTicks++
     if (st.ball.carrierId) this.lastTouchSide = st.players[st.ball.carrierId].side
@@ -384,6 +414,7 @@ export class MatchEngine {
 
   /** Touche : le plus proche vient prendre la balle sur la ligne. */
   private throwIn(side: Side, x: number, y: number) {
+    this.markSetPiece(side)
     const st = this.state
     const taker = this.nearestTo(x, y, side)
     if (!taker) return
@@ -557,6 +588,7 @@ export class MatchEngine {
     if (t.shotOutcome === 'goal') {
       st.score[shootingSide]++
       shooter.stats.goals++
+      if (this.isSetPieceGoal(shootingSide)) this.tms(shootingSide).stats.setPieceGoals++
       this.bumpRating(shooterId, 1)
       const assistId = t.assistCandidateId
       if (assistId && !t.fromPenalty && st.players[assistId].side === shootingSide) {
@@ -657,6 +689,7 @@ export class MatchEngine {
   }
 
   private giveCorner(side: Side) {
+    this.markSetPiece(side)
     const st = this.state
     // spot de corner côté but adverse
     const goal = this.attackedGoal(side)
@@ -742,6 +775,7 @@ export class MatchEngine {
    * résolution un coup — la frappe voyage jusqu'au but via un transit tir.
    */
   private awardPenalty(attSide: Side) {
+    this.markSetPiece(attSide)
     const st = this.state
     const attTms = this.tms(attSide)
     const defSide: Side = attSide === 'home' ? 'away' : 'home'
@@ -1197,6 +1231,7 @@ export class MatchEngine {
       }
 
       // coup franc : possession conservée, petit temps de repli
+      this.markSetPiece(carrier.side)
       st.ball.carrierId = carrier.id
       st.possession = carrier.side
       this.freezeUntilTick = st.tick + 10
@@ -1229,6 +1264,9 @@ export class MatchEngine {
     // changement de camp : les comportements choisis n'ont plus de sens
     if (st.possession !== this.lastSlicePossession) {
       this.lastSlicePossession = st.possession
+      if (this.setPieceChain && this.setPieceChain.side !== st.possession) {
+        this.setPieceChain = null // le ballon a changé de camp : chaîne rompue
+      }
       this.sliceTargets.clear()
       this.runEpisodes.clear() // on perd le ballon : les appels tombent
     }
@@ -1293,6 +1331,13 @@ export class MatchEngine {
         lp.stats.distance += step
         // rapporté à la vitesse max RÉELLE : courir à 60 % coûte moins cher
         speedRatio = step / (vmaxFull * TICK_SEC)
+        // seuils absolus (m/s), pas relatifs : un joueur lent à fond n'est pas
+        // en sprint au sens de l'analyse de match
+        const mps = step / TICK_SEC
+        if (mps > SPRINT_WALK) {
+          lp.stats.runningTicks++
+          if (mps > SPRINT_SPEED) lp.stats.sprintTicks++
+        }
       }
 
       const tms = this.tms(lp.side)
@@ -1363,6 +1408,17 @@ export class MatchEngine {
       const lineDef = txs.length >= 2 ? txs[1] : 0.15
       this.offsideLine.set(side, 1 - lineDef)
     }
+  }
+
+  /** Ouvre une chaîne de phase arrêtée au profit de `side`. */
+  private markSetPiece(side: Side) {
+    this.setPieceChain = { side, untilTick: this.state.tick + SET_PIECE_CHAIN_TICKS }
+  }
+
+  /** Le but qui vient d'être marqué vient-il d'une phase arrêtée ? */
+  private isSetPieceGoal(scoringSide: Side): boolean {
+    const c = this.setPieceChain
+    return c !== null && c.side === scoringSide && this.state.tick < c.untilTick
   }
 
   /** Le récepteur est-il hors-jeu AU MOMENT de la passe ? */
