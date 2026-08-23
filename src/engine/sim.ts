@@ -65,6 +65,39 @@ const SPRINT_SPEED = 7
  */
 const SET_PIECE_CHAIN_TICKS = 150
 
+/**
+ * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
+ * laisser au vainqueur. C'est la première source de touches d'un vrai match :
+ * sans elle, 142 interceptions et 25 tacles par match ne produisaient aucune
+ * remise en jeu. Calibré au sim-bench sur 35-45 touches et 9-11 corners.
+ */
+const DUEL_OUT_TACKLE = 0.5
+const DUEL_OUT_INTERCEPT = 0.16
+
+/** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
+const GOAL_LINE_OUT_M = 10
+
+/**
+ * Durée des arrêts de jeu, EN SECONDES. Ces valeurs étaient auparavant écrites
+ * directement en ticks (10 par seconde) : une touche reprenait en 1 s au lieu
+ * de 10, et le moteur enchaînait 90 minutes quasi sans respiration — 0,9 % de
+ * temps mort contre ~30 % dans un vrai match.
+ */
+const STOPPAGE_S = {
+  throwIn: 10,
+  goalKick: 16,
+  corner: 14,
+  freeKick: 12,
+  penalty: 24,
+  keeperRestart: 8,
+  kickoff: 30,
+} as const
+
+/** Secondes -> ticks. */
+function ticks(seconds: number): number {
+  return Math.round(seconds / TICK_SEC)
+}
+
 const HOME_GOAL = { x: 0, y: PITCH.W / 2 }
 const AWAY_GOAL = { x: PITCH.L, y: PITCH.W / 2 }
 
@@ -394,15 +427,22 @@ export class MatchEngine {
     const outX = st.ball.x < M || st.ball.x > PITCH.L - M
     if (!outY && !outX) return
     const last = this.lastTouchSide ?? st.possession ?? 'home'
-    const other: Side = last === 'home' ? 'away' : 'home'
+    this.ballOut(last, st.ball.x, st.ball.y, outY)
+  }
 
-    if (outY) {
+  /**
+   * Résout une sortie de balle en (x, y), le dernier contact étant `last`.
+   * Partagé par la détection sur trajectoire et par les sorties sur duel.
+   */
+  private ballOut(last: Side, x: number, y: number, sideline: boolean) {
+    const other: Side = last === 'home' ? 'away' : 'home'
+    if (sideline) {
       // touche pour le camp qui n'a pas touché le ballon en dernier
-      this.throwIn(other, clamp(st.ball.x, 2, PITCH.L - 2), st.ball.y < M ? 0.6 : PITCH.W - 0.6)
+      this.throwIn(other, clamp(x, 2, PITCH.L - 2), y < PITCH.W / 2 ? 0.6 : PITCH.W - 0.6)
       return
     }
     // ligne de but : dernier touché défenseur → corner ; attaquant → six mètres
-    const defSide: Side = st.ball.x < M ? 'home' : 'away'
+    const defSide: Side = x < PITCH.L / 2 ? 'home' : 'away'
     if (last === defSide) {
       this.tms(other).stats.corners++
       this.giveCorner(other)
@@ -412,9 +452,24 @@ export class MatchEngine {
     }
   }
 
+  /**
+   * Un duel (tacle, interception) qui chasse le ballon hors du terrain. La
+   * ligne franchie est la plus proche du point du duel : au milieu c'est une
+   * touche, près d'une ligne de but c'est un corner ou un six mètres selon qui
+   * a touché en dernier.
+   */
+  private knockOut(last: Side, x: number, y: number) {
+    // La touche est l'issue par défaut : un joueur en difficulté pousse le
+    // ballon sur le côté. La ligne de but n'est franchie que tout près d'elle,
+    // sinon la seule géométrie (105 m de long contre 68 de large) produirait
+    // un corner à chaque duel aux abords de la surface.
+    const dGoalLine = Math.min(x, PITCH.L - x)
+    this.ballOut(last, x, y, dGoalLine > GOAL_LINE_OUT_M)
+  }
+
   /** Touche : le plus proche vient prendre la balle sur la ligne. */
   private throwIn(side: Side, x: number, y: number) {
-    this.markSetPiece(side)
+    this.markSetPiece(side, STOPPAGE_S.throwIn)
     const st = this.state
     const taker = this.nearestTo(x, y, side)
     if (!taker) return
@@ -431,7 +486,7 @@ export class MatchEngine {
     st.possession = side
     this.lastTouchSide = side
     taker.stats.touches++
-    this.freezeUntilTick = st.tick + 10
+    this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.throwIn)
     this.restartExemptUntilTick = st.tick + 40
     this.nextDecisionTick = st.tick + 12
     this.lastPasserId = null
@@ -456,7 +511,7 @@ export class MatchEngine {
     }
     st.possession = defSide
     this.lastTouchSide = defSide
-    this.freezeUntilTick = st.tick + 16
+    this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.goalKick)
     this.restartExemptUntilTick = st.tick + 45
     this.nextDecisionTick = st.tick + 20
     this.log('goal_kick', `Six mètres pour ${this.tms(defSide).team.short}.`, defSide, undefined, spot.x, spot.y)
@@ -478,7 +533,7 @@ export class MatchEngine {
         st.possession = defSide
         taker.stats.touches++
       }
-      this.freezeUntilTick = st.tick + 12
+      this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.freeKick)
       this.restartExemptUntilTick = st.tick + 40
       this.nextDecisionTick = st.tick + 14
       this.lastPasserId = null
@@ -495,14 +550,21 @@ export class MatchEngine {
     if (t.interceptedById) {
       // passe coupée sur la trajectoire : l'intercepteur récupère sur place
       const inter = st.players[t.interceptedById]
-      st.ball.carrierId = inter.id
-      st.possession = inter.side
       this.lastTouchSide = inter.side
-      inter.stats.touches++
       inter.stats.interceptions++
       this.bumpRating(inter.id, 0.2)
       this.log('interception', `Belle lecture ! ${this.nameOf(inter.id)} coupe la passe.`, inter.side, inter.id, inter.x, inter.y)
       this.lastPasserId = null
+      // une interception sur dix est un dégagement en catastrophe plutôt qu'une
+      // récupération propre : le ballon file en touche
+      if (this.rng.chance(DUEL_OUT_INTERCEPT)) {
+        st.ball.carrierId = null
+        this.knockOut(inter.side, inter.x, inter.y)
+        return
+      }
+      st.ball.carrierId = inter.id
+      st.possession = inter.side
+      inter.stats.touches++
       this.nextDecisionTick = st.tick + 5
       return
     }
@@ -622,7 +684,7 @@ export class MatchEngine {
           success: true,
         }
         st.possession = keeper.side
-        this.freezeUntilTick = st.tick + 10
+        this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.keeperRestart)
         this.restartExemptUntilTick = st.tick + 40
         this.nextDecisionTick = st.tick + 14
       }
@@ -670,7 +732,7 @@ export class MatchEngine {
           success: true,
         }
         st.possession = defSide
-        this.freezeUntilTick = st.tick + 16
+        this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.goalKick)
         this.restartExemptUntilTick = st.tick + 45
         this.nextDecisionTick = st.tick + 20
         this.log('goal_kick', `Six mètres pour ${defTms.team.short}.`, defSide, undefined, spot.x, spot.y)
@@ -689,7 +751,7 @@ export class MatchEngine {
   }
 
   private giveCorner(side: Side) {
-    this.markSetPiece(side)
+    this.markSetPiece(side, STOPPAGE_S.corner)
     const st = this.state
     // spot de corner côté but adverse
     const goal = this.attackedGoal(side)
@@ -716,7 +778,7 @@ export class MatchEngine {
       this.lastTouchSide = side
       st.ball.x = x
       st.ball.y = y
-      this.freezeUntilTick = st.tick + 10
+      this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.corner)
       this.restartExemptUntilTick = st.tick + 40
       this.nextDecisionTick = st.tick + 12
     }
@@ -775,7 +837,7 @@ export class MatchEngine {
    * résolution un coup — la frappe voyage jusqu'au but via un transit tir.
    */
   private awardPenalty(attSide: Side) {
-    this.markSetPiece(attSide)
+    this.markSetPiece(attSide, STOPPAGE_S.penalty)
     const st = this.state
     const attTms = this.tms(attSide)
     const defSide: Side = attSide === 'home' ? 'away' : 'home'
@@ -845,7 +907,7 @@ export class MatchEngine {
       shooterId: shooter.id,
       fromPenalty: true,
     }
-    this.freezeUntilTick = st.tick + 24
+    this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.penalty)
     this.restartExemptUntilTick = st.tick + 45
     this.nextDecisionTick = st.tick + 26
     this.lastPasserId = null
@@ -1231,10 +1293,10 @@ export class MatchEngine {
       }
 
       // coup franc : possession conservée, petit temps de repli
-      this.markSetPiece(carrier.side)
+      this.markSetPiece(carrier.side, STOPPAGE_S.freeKick)
       st.ball.carrierId = carrier.id
       st.possession = carrier.side
-      this.freezeUntilTick = st.tick + 10
+      this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.freeKick)
       this.restartExemptUntilTick = st.tick + 40
       this.nextDecisionTick = st.tick + 12
       return
@@ -1244,12 +1306,23 @@ export class MatchEngine {
     first.stats.tackles++
     this.bumpRating(first.id, 0.2)
     this.bumpRating(carrier.id, -0.05)
+    this.log('tackle', `Beau tacle de ${this.nameOf(first.id)} !`, oppSide, first.id)
+    this.lastPasserId = null
+
+    // un tacle sur deux environ chasse le ballon hors du terrain plutôt que de
+    // le laisser au tacleur : c'est la première source de touches d'un vrai
+    // match, et le moteur n'en produisait aucune
+    if (this.rng.chance(DUEL_OUT_TACKLE)) {
+      st.ball.carrierId = null
+      this.lastTouchSide = first.side
+      this.knockOut(first.side, carrier.x, carrier.y)
+      return
+    }
+
     st.ball.carrierId = first.id
     st.possession = first.side
     this.lastTouchSide = first.side
     first.stats.touches++
-    this.log('tackle', `Beau tacle de ${this.nameOf(first.id)} !`, oppSide, first.id)
-    this.lastPasserId = null
     this.nextDecisionTick = st.tick + 5
   }
 
@@ -1411,8 +1484,12 @@ export class MatchEngine {
   }
 
   /** Ouvre une chaîne de phase arrêtée au profit de `side`. */
-  private markSetPiece(side: Side) {
-    this.setPieceChain = { side, untilTick: this.state.tick + SET_PIECE_CHAIN_TICKS }
+  private markSetPiece(side: Side, stoppageS: number) {
+    // la fenêtre court sur le jeu VIVANT qui suit la reprise : comptée depuis
+    // l'arrêt, un arrêt long la consommerait entièrement et aucun but ne serait
+    // jamais imputé à la phase arrêtée
+    const untilTick = this.state.tick + ticks(stoppageS) + SET_PIECE_CHAIN_TICKS
+    this.setPieceChain = { side, untilTick }
   }
 
   /** Le but qui vient d'être marqué vient-il d'une phase arrêtée ? */
@@ -1718,7 +1795,7 @@ export class MatchEngine {
       st.ball.carrierId = taker.id
       st.possession = kickingSide
     }
-    this.freezeUntilTick = st.tick + 15
+    this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.kickoff)
     this.restartExemptUntilTick = st.tick + 40
     this.nextDecisionTick = st.tick + 18
     this.lastPasserId = null

@@ -307,6 +307,47 @@ describe('MatchEngine', () => {
   })
 })
 
+describe('sorties de balle', () => {
+  // Régression : aucun duel ne mettait le ballon dehors. 142 interceptions et
+  // 25 tacles par match transféraient tous la possession sur place, et les
+  // seules sorties venaient des passes ratées — d'où 12,8 touches par match
+  // contre 35-45 réelles, et 0,9 % de temps mort contre ~30 %.
+  // Bandes volontairement larges : elles verrouillent la structure (le ballon
+  // sort, le jeu s'arrête) sans casser au moindre réglage de calibration.
+  const seeds = [101, 202, 303, 404]
+  const counts = { throw_in: 0, corner: 0, goal_kick: 0 }
+  let deadTicks = 0
+  let totalTicks = 0
+  for (const seed of seeds) {
+    const engine = runFullMatch(seed)
+    for (const e of engine.state.events) {
+      if (e.type in counts) counts[e.type as keyof typeof counts]++
+    }
+    deadTicks += engine.state.deadTicks
+    totalTicks += engine.state.tick
+  }
+
+  it('produit des touches à une fréquence plausible', () => {
+    const perMatch = counts.throw_in / seeds.length
+    expect(perMatch).toBeGreaterThan(15)
+    expect(perMatch).toBeLessThan(60)
+  })
+
+  it('produit des corners et des six mètres', () => {
+    expect(counts.corner / seeds.length).toBeGreaterThan(3)
+    expect(counts.corner / seeds.length).toBeLessThan(20)
+    expect(counts.goal_kick / seeds.length).toBeGreaterThan(3)
+  })
+
+  it('arrête réellement le jeu sur chaque remise en jeu', () => {
+    // les durées d'arrêt étaient écrites en ticks au lieu de secondes : une
+    // touche reprenait en 1 s, et le temps mort tombait sous 1 % du match
+    const share = deadTicks / totalTicks
+    expect(share).toBeGreaterThan(0.05)
+    expect(share).toBeLessThan(0.45)
+  })
+})
+
 describe('instrumentation des critères du Pilier A', () => {
   // Un compteur débranché lit 0 sans rien signaler, et `sim --check` affiche
   // alors « 0.0% » comme s'il avait mesuré. Ces invariants attrapent le
