@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { MatchEngine } from './engine/sim'
 import { defaultInstructions } from './engine/instructions'
 import type { MatchInstructions } from './engine/types'
-import { TEAMS } from './data/teams'
+import { ALL_TEAMS } from './data/allTeams'
 import { loadSettings, saveSettings, type LLMSettings } from './llm/presets'
 import { SetupScreen } from './ui/screens/SetupScreen'
 import { SquadScreen } from './ui/screens/SquadScreen'
@@ -14,14 +14,14 @@ export type Screen = 'setup' | 'squad' | 'tactics' | 'match' | 'post'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('setup')
-  const [userTeamId, setUserTeamId] = useState<string>(TEAMS[0].id)
+  const [userTeamId, setUserTeamId] = useState<string>(ALL_TEAMS[0].id)
   const [settings, setSettings] = useState<LLMSettings>(() => loadSettings())
   const [instructions, setInstructions] = useState<MatchInstructions>(() => defaultInstructions())
   const [engine, setEngine] = useState<MatchEngine | null>(null)
   const [matchVersion, setMatchVersion] = useState(0)
 
-  const userTeam = TEAMS.find((t) => t.id === userTeamId)!
-  const opponent = TEAMS.find((t) => t.id !== userTeamId)!
+  const userTeam = ALL_TEAMS.find((t) => t.id === userTeamId)!
+  const opponent = ALL_TEAMS.find((t) => t.id !== userTeamId)!
 
   const updateSettings = (s: LLMSettings) => {
     setSettings(s)
