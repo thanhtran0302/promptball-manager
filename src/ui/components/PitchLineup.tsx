@@ -1,7 +1,7 @@
 // Éditeur de composition : terrain vu de dessus (attaque vers la droite),
 // un titulaire par poste — clic sur un poste pour choisir le joueur.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FORMATION_SLOTS, relineupForFormation } from '../../engine/formations'
 import { FORMATIONS, type Formation, type Team } from '../../engine/types'
 
@@ -19,6 +19,25 @@ export function PitchLineup({ team, formation, lineup, onChange }: Props) {
   const bench = team.players.filter((p) => !lineup.includes(p.id))
 
   const byId = new Map(team.players.map((p) => [p.id, p]))
+
+  // fermeture du popup : clic hors d'un poste, ou touche Échap.
+  // On teste `.pl-slot` et non `.pl-pop` : cliquer un autre jeton doit basculer
+  // vers son popup (son onClick s'en charge), pas fermer puis rouvrir.
+  useEffect(() => {
+    if (openSlot === null) return
+    const onPointerDown = (e: PointerEvent) => {
+      if (!(e.target as Element).closest('.pl-slot')) setOpenSlot(null)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenSlot(null)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [openSlot])
 
   const choose = (slotIdx: number, playerId: string) => {
     const next = [...lineup]
@@ -61,7 +80,7 @@ export function PitchLineup({ team, formation, lineup, onChange }: Props) {
           if (!p) return null
           const isGK = p.role === 'GK'
           return (
-            <div key={i} className="pl-slot" style={{ left: `${slot.x * 100}%`, top: `${slot.y * 100}%` }}>
+            <div key={i} className={`pl-slot ${openSlot === i ? 'open' : ''}`} style={{ left: `${slot.x * 100}%`, top: `${slot.y * 100}%` }}>
               <button
                 className={`pl-dot ${isGK ? 'gk' : ''} ${openSlot === i ? 'active' : ''}`}
                 style={!isGK ? { background: team.color } : undefined}

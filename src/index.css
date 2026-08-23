@@ -178,6 +178,17 @@ textarea {
   width: 100%;
 }
 
+/* Flèche dessinée par nous. La flèche native réserve une largeur imposée par
+   le navigateur (32 px ici contre 10 px de padding à gauche), que le padding
+   ne peut pas rééquilibrer : il faut d'abord la retirer. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238fa0b8' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
 textarea {
   resize: vertical;
 }
@@ -449,6 +460,14 @@ label {
   align-items: center;
   gap: 3px;
   z-index: 2;
+}
+
+/* .pl-slot crée un contexte d'empilement (transform + z-index) : le z-index de
+   .pl-pop y est confiné et ne peut pas franchir les postes voisins. C'est donc
+   le poste ouvert qu'il faut soulever, sinon les postes suivants dans le DOM se
+   peignent sur le popup et volent les clics de la liste. */
+.pl-slot.open {
+  z-index: 30;
 }
 
 .pl-dot {
