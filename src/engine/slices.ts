@@ -178,13 +178,18 @@ export function defenseWeights(inp: DefenseSliceInput): Weighted<DefBehavior>[] 
 
   push('hold_shape', 10)
 
-  // fermer sur le porteur : surtout les deux plus proches du ballon
+  // près de son but, tout le monde défense : les comportements s'urgent
+  const nearOwnGoal = inp.ballTx < 0.25
+
+  // fermer sur le porteur : surtout les deux (ou trois) plus proches du ballon
   let cdW = 0.35
   if (inp.presserRank === 0) cdW = 3.2
   else if (inp.presserRank === 1) cdW = 1.2
+  else if (inp.presserRank === 2) cdW = 0.6
   cdW *= 0.7 + (attrs.aggression / 99) * 0.6
   if (ti.pressing === 'haut') cdW *= 1.7
   if (ti.pressing === 'bas') cdW *= 0.55
+  if (nearOwnGoal) cdW *= 1.5 // on saute sur le porteur dans sa surface
   if (pi?.instruction === 'man_mark') cdW *= 0.8 // il a déjà un marquage
   push('close_down', cdW)
 
@@ -202,10 +207,11 @@ export function defenseWeights(inp: DefenseSliceInput): Weighted<DefBehavior>[] 
   push('cover', covW)
 
   // marquage de l'attaquant proche
-  if (inp.nearestAttackerDist < 12) {
+  if (inp.nearestAttackerDist < (nearOwnGoal ? 16 : 12)) {
     let mmW = role === 'DF' ? 2.2 : 1
     if (pi?.instruction === 'man_mark') mmW *= 3.5
     mmW *= 0.6 + (attrs.decisions / 99) * 0.6
+    if (nearOwnGoal) mmW *= 1.8 // dans la surface, on colle son attaquant
     push('mark_man', mmW)
   }
 

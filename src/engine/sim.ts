@@ -148,8 +148,8 @@ export class MatchEngine {
   private smoothed = new Map<Side, { tx: number; ty: number }>()
   /** phase attaque (1) / défense (0) lissée par côté — transitions visibles */
   private phase = new Map<Side, number>()
-  /** rang des deux défenseurs les plus proches du ballon (0 = premier presseur) */
-  private presserRanks = new Map<string, 0 | 1>()
+  /** rang des défenseurs les plus proches du ballon (0 = premier presseur) */
+  private presserRanks = new Map<string, 0 | 1 | 2>()
   /** ligne du hors-jeu par côté, en espace ATTAQUANT (tx max pour rester en jeu) */
   private offsideLine = new Map<Side, number>()
   /** passes exemptées de hors-jeu après remise en jeu (engagement, 6 m, corner, CF) */
@@ -982,9 +982,13 @@ export class MatchEngine {
       const offCenter = Math.abs(carrier.y - goal.y)
       const angleF = 1 - Math.min(offCenter / 28, 1) * 0.6
       const rangeF = Math.pow((25 - Math.min(dGoal, 25)) / 25, 2.2)
-      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.19
-      if (dGoal < 16) w *= 1.85 // dans la surface : on conclut l'action
-      w /= 1 + pressure * 0.3
+      let w = rangeF * (0.9 + a.shooting / 70) * angleF * 0.062
+      w *= 0.7 + (a.composure / 99) * 0.6 // le sang-froid conclut
+      if (dGoal < 16) w *= 1.9 // dans la surface : le tir est le choix par défaut
+      if (dGoal < 11) w *= 1.3 // très proche : on arme
+      // situation franche : réellement seul à moins de 11 m — on frappe.
+      if (dGoal < 11 && pressure < 0.7) w = Math.max(w, 0.5)
+      w /= 1 + Math.max(pressure - 1.2, 0) * 0.5 // pressé à plusieurs : plus difficile
       if (pi?.instruction === 'shoot_more') w *= 2.2
       w *= 0.7 + MENTALITY_LEVEL[ti.mentality] * 0.12
       push({ kind: 'shoot' }, w)
@@ -1460,14 +1464,18 @@ export class MatchEngine {
     this.presserRanks.clear()
     for (const side of ['home', 'away'] as const) {
       if (st.possession === side) continue
+      const ballTs = this.toTeamSpace(side, st.ball.x, st.ball.y)
+      // près de son but, un troisième défenseur vient aider
+      const maxRank = ballTs.tx < 0.3 ? 3 : 2
       const cands = Object.values(st.players)
         .filter((lp) => lp.onPitch && lp.side === side && this.player(lp.id).role !== 'GK')
         .sort(
           (a, b) =>
             dist(a.x, a.y, st.ball.x, st.ball.y) - dist(b.x, b.y, st.ball.x, st.ball.y),
         )
-      if (cands[0]) this.presserRanks.set(cands[0].id, 0)
-      if (cands[1]) this.presserRanks.set(cands[1].id, 1)
+      for (let r = 0; r < maxRank; r++) {
+        if (cands[r]) this.presserRanks.set(cands[r].id, r as 0 | 1 | 2)
+      }
     }
 
     // ligne de hors-jeu pour chaque camp attaquant = position de l'avant-dernier
