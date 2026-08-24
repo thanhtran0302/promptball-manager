@@ -204,11 +204,16 @@ export function clubColors(slug: string): [string, string] {
 // --- Sélection du groupe ----------------------------------------------------
 
 /**
- * Plancher imposé par les cinq formations de FORMATION_SLOTS : la plus
- * gourmande de chaque ligne demande 5 DF (5-3-2), 5 MD (4-2-3-1 et 3-5-2) et
- * 3 AT (4-3-3). Avec un gardien remplaçant : 2 + 5 + 5 + 3 = 15, le 16e libre.
+ * Plancher imposé par les onze formations de FORMATION_SLOTS : la plus
+ * gourmande de chaque ligne demande 5 DF (5-3-2, 5-4-1), 5 MD (4-2-3-1, 3-5-2,
+ * 4-1-4-1, 4-4-1-1, 4-5-1) et 4 AT (4-2-4).
+ *
+ * Avec un gardien remplaçant : 2 + 5 + 5 + 4 = 16, soit exactement la taille du
+ * groupe. Les quotas le déterminent donc entièrement — la boucle au mérite de
+ * selectSquad ne sert plus qu'aux clubs dont une ligne est trop courte à la
+ * source.
  */
-const MIN_BY_ROLE: Record<Role, number> = { GK: 2, DF: 5, MD: 5, AT: 3 }
+const MIN_BY_ROLE: Record<Role, number> = { GK: 2, DF: 5, MD: 5, AT: 4 }
 
 /** Liste vide = groupe conforme. */
 export function squadViolations(squad: Player[]): string[] {

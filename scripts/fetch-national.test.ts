@@ -182,11 +182,21 @@ describe('selectSquad', () => {
     expect(squad.map((p) => p.id)).not.toContain('p8')
   })
 
-  it('donne la place restante au meilleur joueur disponible', () => {
+  it('remplit exactement les quotas, sans place discrétionnaire', () => {
+    // Depuis l'ajout du 4-2-4, 2+5+5+4 = 16 : les quotas saturent le groupe.
     const squad = selectSquad(pool([['DF', 8], ['MD', 8], ['AT', 6], ['GK', 3]]))
-    // 2+5+5+3 = 15 par quota ; la 16e revient au meilleur défenseur restant.
+    expect(squad).toHaveLength(16)
+    expect(squad.filter((p) => p.role === 'DF')).toHaveLength(5)
+    expect(squad.filter((p) => p.role === 'AT')).toHaveLength(4)
+  })
+
+  it('complète au mérite quand une ligne est trop courte', () => {
+    // Cas Villefranche : trois attaquants seulement dans l'effectif. La place
+    // laissée libre revient au meilleur joueur restant, et le manque remonte.
+    const squad = selectSquad(pool([['DF', 9], ['MD', 8], ['AT', 3], ['GK', 3]]))
     expect(squad).toHaveLength(16)
     expect(squad.filter((p) => p.role === 'DF')).toHaveLength(6)
+    expect(squadViolations(squad).some((v) => v.includes('AT'))).toBe(true)
   })
 
   it("laisse une ligne trop courte remonter au lieu de la masquer", () => {
