@@ -368,6 +368,42 @@ describe('MatchEngine', () => {
     expect(km).toBeGreaterThan(8)
   })
 
+  // Régression : `PlayerStats.saves` était déclaré, initialisé à 0, et
+  // incrémenté nulle part dans le moteur. Les gardiens finissaient tous les
+  // matchs à 0 arrêt alors que l'évènement `save` se déclenchait sept fois par
+  // match, et leur note restait collée à la base — 6,16 de moyenne, quel que
+  // soit le match joué.
+  it('compte les arrêts du gardien et les porte à sa note (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let saves = 0
+    let saveEvents = 0
+    const clean: number[] = []
+    const leaky: number[] = []
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      saveEvents += engine.state.events.filter((e) => e.type === 'save').length
+      for (const [tms, otherSide] of [
+        [engine.state.home, 'away'],
+        [engine.state.away, 'home'],
+      ] as const) {
+        const keeperId = tms.lineup.find(
+          (id) => tms.team.players.find((p) => p.id === id)!.role === 'GK',
+        )!
+        const keeper = engine.state.players[keeperId]
+        saves += keeper.stats.saves
+        const conceded = engine.state.score[otherSide]
+        if (conceded === 0) clean.push(keeper.stats.rating)
+        if (conceded >= 3) leaky.push(keeper.stats.rating)
+      }
+    }
+    // la statistique existe et suit les évènements du match
+    expect(saves).toBeGreaterThan(0)
+    expect(saves).toBe(saveEvents)
+    // et la note du gardien répond à ce qu'il a fait
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1)
+    if (clean.length && leaky.length) expect(mean(clean)).toBeGreaterThan(mean(leaky))
+  })
+
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
     let sot = 0
     let shots = 0
