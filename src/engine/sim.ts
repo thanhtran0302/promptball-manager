@@ -1597,7 +1597,13 @@ export class MatchEngine {
     const b = this.toTeamSpace(side, this.state.ball.x, this.state.ball.y)
     if (r.tx <= b.tx + 0.005) return false // pas devant le ballon
     const line = this.offsideLine.get(side) ?? 0.9
-    return r.tx > line + 0.03 // dépassement net (~3 m au-delà de l'avant-dernier défenseur)
+    // Tolérance d'environ 20 cm au-delà de l'avant-dernier défenseur. Elle
+    // était de 0,03, soit 3,15 m : un attaquant devait dépasser d'une longueur
+    // de voiture pour être signalé, et l'arbitre ne sifflait que 0,5 hors-jeu
+    // par match contre ~4 en vrai. La règle réelle se joue au centimètre ; ce
+    // qu'il reste ici n'est pas une marge d'arbitrage mais l'épaisseur d'un
+    // corps, que le moteur réduit à un point.
+    return r.tx > line + 0.002
   }
 
   /** Micro-décision façon FM : choix pondéré d'un comportement, cible en terrain. */
