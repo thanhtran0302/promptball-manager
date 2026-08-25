@@ -74,6 +74,20 @@ const SET_PIECE_CHAIN_TICKS = 150
 const DUEL_OUT_TACKLE = 0.5
 const DUEL_OUT_INTERCEPT = 0.16
 
+/**
+ * Vitesse d'une passe en m/s. Sert deux fois : la durée du transit, et le
+ * temps dont dispose un défenseur pour se jeter sur la ligne de passe.
+ */
+const PASS_SPEED = { short: 13, long: 19 } as const
+
+/**
+ * Fenêtre de réaction sur une ligne de passe : temps de lecture avant de
+ * s'élancer, puis vitesse à laquelle le défenseur couvre les derniers mètres.
+ * Ce sont les deux poignées de calibration du taux de passes coupées.
+ */
+const INTERCEPT_REACTION_S = 0.24
+const INTERCEPT_CLOSING_MS = 4.8
+
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
 
@@ -1067,7 +1081,7 @@ export class MatchEngine {
     const pressReceiver = this.pressureOn(targetId)
 
     let prob =
-      0.965 -
+      0.95 -
       d * (long ? 0.0048 : 0.006) -
       pressReceiver * 0.055 -
       pressPasser * 0.04 +
@@ -1112,7 +1126,7 @@ export class MatchEngine {
       this.bumpRating(carrier.id, -0.03)
     }
 
-    const speed = long ? 19 : 13 // m/s
+    const speed = long ? PASS_SPEED.long : PASS_SPEED.short
     const duration = Math.max(2, Math.round((d / speed) /TICK_SEC))
 
     st.ball.carrierId = null
@@ -1151,6 +1165,8 @@ export class MatchEngine {
     const len2 = vx * vx + vy * vy
     if (len2 < 4) return null
     const reach = 1.25
+    const len = Math.sqrt(len2)
+    const speed = long ? PASS_SPEED.long : PASS_SPEED.short
     let best: { player: LivePlayer; prob: number } | null = null
     for (const o of Object.values(st.players)) {
       if (!o.onPitch || o.side !== oppSide) continue
@@ -1160,8 +1176,15 @@ export class MatchEngine {
       const py = passer.y + vy * t
       const perp = dist(o.x, o.y, px, py)
       if (perp > reach) continue
+      // Le défenseur doit atteindre la ligne avant le ballon. Sans ce terme la
+      // probabilité ne dépendait que de la distance au couloir : un joueur
+      // immobile coupait une passe tendue aussi souvent qu'un ballon lent, et
+      // le moteur cadrait ~5 % des passes coupées contre ~2,8 % en vrai.
+      const travel = (len * t) / speed
+      const need = INTERCEPT_REACTION_S + perp / INTERCEPT_CLOSING_MS
+      if (need >= travel) continue // le ballon est déjà passé
       const a = this.player(o.id).attributes
-      let prob = (1 - perp / reach) * (0.32 + ((a.agility + a.decisions) / 2 / 99) * 0.5)
+      let prob = (1 - need / travel) * (0.32 + ((a.agility + a.decisions) / 2 / 99) * 0.5)
       if (long) prob *= 0.45 // le ballon passe au-dessus de la première ligne
       if (prob > (best?.prob ?? 0)) best = { player: o, prob }
     }
