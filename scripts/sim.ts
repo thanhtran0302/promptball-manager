@@ -205,8 +205,7 @@ const CRITERIA: Criterion[] = [
  * est ce qui matérialise l'avancement d'un chantier.
  */
 const KNOWN_BREACHES = new Map<string, string>([
-  ['Distance / joueur', 'Pilier A — possessions réalistes (16,5 → 10-12 km)'],
-  ['Temps morts', 'Pilier A — arbitrage complet / phases arrêtées jouées'],
+  ['Distance / joueur', 'Pilier A — possessions réalistes (14,2 → 10-12 km)'],
   ['Buts sur phase arrêtée', 'Pilier A — phases arrêtées jouées'],
 ])
 
