@@ -169,13 +169,19 @@ const ROLE_AFFINITY: Record<Role, Partial<Record<Role, number>>> = {
  */
 export function assignSlots(available: Player[], formation: Formation): string[] {
   const slots = FORMATION_SLOTS[formation]
+  if (available.length < slots.length) {
+    throw new Error(`assignSlots : ${available.length} joueurs pour ${slots.length} postes`)
+  }
   const pool = [...available]
-  const result: string[] = []
-  for (const slot of slots) {
-    let bestIdx = 0
+  const result: (string | null)[] = slots.map(() => null)
+
+  /** Meilleur joueur du pool éligible pour ce slot ; le retire du pool. */
+  function take(index: number, slot: Slot, eligible: (p: Player) => boolean) {
+    let bestIdx = -1
     let bestScore = -Infinity
     for (let i = 0; i < pool.length; i++) {
       const p = pool[i]
+      if (!eligible(p)) continue
       const affinity = ROLE_AFFINITY[slot.role][p.role] ?? 0
       // léger bonus d'attribut pour départager
       const attr =
@@ -186,10 +192,23 @@ export function assignSlots(available: Player[], formation: Formation): string[]
         bestIdx = i
       }
     }
-    const [chosen] = pool.splice(bestIdx, 1)
-    result.push(chosen.id)
+    if (bestIdx < 0) return
+    result[index] = pool.splice(bestIdx, 1)[0].id
   }
-  return result
+
+  // Passe 1 — les postes qui tombent juste. `Slot.label` et `Player.position`
+  // partagent le vocabulaire (DC, DG, BU…), et ne servir d'abord que les
+  // correspondances exactes évite deux travers : un latéral rapide raflant la
+  // charnière parce que le score ne lisait que le rôle, et le slot MC prenant
+  // l'unique MD du groupe avant que le slot MD soit servi. Le rôle naturel est
+  // exigé en plus du poste : sur une donnée contradictoire, c'est lui qui fait foi.
+  slots.forEach((slot, i) => take(i, slot, (p) => p.position === slot.label && p.role === slot.role))
+  // Passe 2 — on comble au rôle le plus proche, comme avant.
+  slots.forEach((slot, i) => {
+    if (result[i] === null) take(i, slot, () => true)
+  })
+
+  return result as string[]
 }
 
 /**
