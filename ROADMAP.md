@@ -21,14 +21,18 @@
 
 - ✅ Moteur 10 Hz déterministe : 22 agents, slices de micro-décision (0,3 s),
   pressing sur le porteur, transitions lissées, gestion de l'effort
-- ✅ Règles : hors-jeu géométrique, fautes, jaunes/rouges, penalties, corners,
-  touches, six mètres, arbitre avec personnalité
-- ✅ 16 attributs joueur (dont 4 mentaux), endurance, notes individuelles
+- ✅ Règles : hors-jeu géométrique, fautes (y compris sur tacle manqué), jaunes/rouges,
+  penalties, corners, touches, six mètres, contres de tir, arbitre avec personnalité
+- ✅ 16 attributs joueur (dont 4 mentaux), endurance, notes individuelles (barème `RATING`
+  regroupé et pondéré sur ce qui décide le match)
+- ✅ Compositions par poste réel (`assignSlots` lit `Player.position`, pas seulement le rôle)
 - ✅ Prompting avant-match + pause tactique (OpenAI / Grok / OpenRouter), coach,
   mode démo, éditeur manuel, composition sur terrain cliquable
-- ✅ Vue 2D annotée, stats live, post-match, sim-bench `--sweep` / `--check`, 19 tests
-- 📊 Calibration : 2,6 buts/match, 84 % de passes, 15 touches, 7 corners,
-  16,5 km/joueur (cible 10-12), ~0,2 rouge, ~0,3 penalty
+- ✅ Vue 2D annotée, stats live, post-match, sim-bench `--sweep` / `--check`, 124 tests
+- ✅ **Les sept critères mesurables du Pilier A sont verts** — `KNOWN_BREACHES` est vide
+- 📊 Calibration (30 matchs, neutre) : 2,6 buts/match, 85,9 % de passes, 26 touches,
+  10,0 corners, 11,0 km/joueur, 19,3 fautes, 3,1 jaunes, 0,33 rouge, 0,23 penalty,
+  33 % de temps morts, 3,9 hors-jeu
 
 ---
 
@@ -41,27 +45,56 @@ quand tous ses critères sont verts au sim-bench / en tests.
 
 Le moteur doit ressembler à du football, pas à une approximation.
 
-| Critère « excellent » | Cible mesurable |
-|---|---|
-| Buts / match | 2,5 – 3,0 |
-| Tirs / équipe | 11 – 15, cadrés 35 – 42 % |
-| Passes réussies | 82 – 86 % |
-| Distance / joueur | 9 – 12 km (profils par poste) |
-| Sprint / temps de course | < 10 % |
-| Temps morts (sorties, arrêts) | ~30 % du temps |
-| Buts sur phase arrêtée | 25 – 35 % |
+| Critère « excellent » | Cible mesurable | Mesuré (30 matchs) |
+|---|---|---|
+| Buts / match | 2,5 – 3,0 | ✅ 2,6 |
+| Tirs / équipe | 11 – 15, cadrés 35 – 42 % | ✅ 11,5 · 35,7 % |
+| Passes réussies | 82 – 86 % | ✅ 85,9 % |
+| Distance / joueur | 9 – 12 km (profils par poste) | ✅ 11,0 (G 5,9 · D 9,7 · M 13,1 · A 9,2) |
+| Sprint / temps de course | < 10 % | ✅ 6,4 % |
+| Temps morts (sorties, arrêts) | ~30 % du temps | ✅ 33,2 % |
+| Buts sur phase arrêtée | 25 – 35 % | ✅ 30,8 % |
+
+Les sept critères sont verts au `--check` — qui en imprime huit lignes, séparant tirs et
+tirs cadrés — et `KNOWN_BREACHES` est vide. Le pilier n'est pas certifié pour autant : ce
+tableau mesure le **rendu statistique**, pas la richesse du jeu. Le jeu aérien et les
+phases arrêtées jouées manquent toujours, et trois des bornes ci-dessus demandent d'être
+revues contre les données réelles (chantier plus bas).
 
 Chantiers :
 - [ ] **Jeu aérien** : axe z du ballon (trajectoires, rebonds), attributs *détente*
       et *jeu de tête*, duels aériens, vrais centres (premier/deuxième poteau, retrait)
 - [ ] **Phases arrêtées jouées** : routines de corner, murs à 9,15 m, coups francs
       directs avec tireur, touches et relances travaillées
-- [ ] **Arbitrage complet** : avantage joué, temps additionnel sur arrêts réels
-- [ ] **Possessions réalistes** : chaînes plus longues, temps morts, 16,5 → 10-12 km
+- [ ] **Arbitrage complet** : avantage joué, temps additionnel calculé sur les arrêts
+      réels (aujourd'hui tiré au hasard entre 30 s et 3 min, sans lien avec le jeu)
+      — les fautes, cartons et penalties sont eux au bon niveau
+- [x] **Possessions réalistes** : temps morts 19 → 33 %, 18,0 → 11,0 km/joueur (la note
+      d'origine de ce chantier disait 16,5, mesure d'une version antérieure), effort
+      qui dépend de la distance à couvrir, joueurs qui marchent ballon mort
+- [ ] **Tirs contrés sous-calibrés** : 12 % des tirs contre ~28 % en vrai. Élargir la
+      portée du contreur y amène mais pénalise les équipes faibles, dont les tirs partent
+      de plus loin — il faut faire dépendre le contre de la qualité de la position de frappe
+- [ ] **Touches sous la cible** : 26 par match contre ~40. Bloqué par la borne de temps
+      morts (voir le chantier des bornes) : plus de sorties = moins de jeu effectif
 - [ ] **Décisions secondaires du porteur** (option de repli si solution marquée)
 - [ ] **Blessures** (risque par action, gravité, remplacement forcé) — version légère,
       pas le système médical complet (déverrouillé)
 - [ ] Mode **temps forts** (intégral / étendu / clés) — le rythme de visionnage FM
+
+**Chantiers de méthode** (le bench lui-même) :
+- [ ] **Revoir trois bornes contre le réel.** Elles sont aujourd'hui incompatibles entre
+      elles ou avec le football réel : plancher `Tirs cadrés` à 35 % quand Opta mesure
+      ~34 % (le viser force le taux d'arrêt du gardien 3 points au-dessus du réel) ;
+      plafond `Temps morts` à 35 % quand un vrai match est à ~43 % (ce qui interdit les
+      40 touches) ; fenêtre `Buts / match` large de 0,5 quand l'erreur d'échantillonnage
+      à N=30 est de ±0,33, donc la mesure bat
+- [ ] **Référence de bench neutre.** `--check` mesure sur les deux équipes fictives, qui
+      tournent à 68 de technique et 67 de décisions quand la Ligue 3 réelle est à 51 et
+      57 — alors que les formules du moteur s'ancrent sur 50 = joueur moyen. Un moteur
+      vert au bench a longtemps produit 1,5 but/match sur de vrais clubs sans que rien ne
+      le signale. Deux pistes : ramener les fictives au niveau d'ancrage, ou faire entrer
+      un effectif au profil réel dans le `--check`
 
 ## Pilier B — Tactique d'équipe, stratégie & compositions 🧠
 
@@ -82,7 +115,11 @@ Chantiers :
 - [ ] **Formations libres et asymétriques** : glisser-déposer des postes, losange,
       3-2-4-1, import/export JSON
 - [ ] **Plans de match multi-étapes** : « si mené à la 60', 4-2-4 ; si rouge, 5-4-0 »
-      — déclencheurs score/minute/carton/fatigue, IA adverse avec ses propres plans
+      — déclencheurs score/minute/carton/fatigue, IA adverse avec ses propres plans.
+      Devenu urgent : la fatigue mord désormais (fraîcheur ~70 en fin de match, jusqu'à
+      60 pour les plus sollicités) et **aucun remplacement n'est jamais effectué** côté
+      IA — zéro sur vingt matchs. Le plafond est aussi resté à 3 remplacements, contre 5
+      au règlement moderne
 - [ ] **Styles présets** : 8-10 styles historiques (tiki-taka, gegenpress, catenaccio,
       route one, bus + contres…) promptables en une phrase, affinables ensuite
 
@@ -136,7 +173,10 @@ Tout ce qui se passe doit être mesuré, par joueur.
 
 Chantiers :
 - [ ] Instrumentation complète : xG par tir, xA par passe, duels (au sol/aériens),
-      récupérations, pertes de balle, pressing subi/exercé, km, sprints, touches
+      récupérations, pertes de balle, pressing subi/exercé, km, sprints, touches.
+      Fait depuis : arrêts du gardien (`PlayerStats.saves` était déclaré et incrémenté
+      nulle part), km et sprints par joueur. Reste ouvert : les interceptions confondent
+      encore passe coupée et récupération de ballon perdu, deux gestes différents
 - [ ] Collecte de données pour heatmap et carte de passes (post-match)
 - [ ] Écran joueur dédié (fiche + historique de session + comparaisons)
 - [ ] Intégration sim-bench : stats de sortie par poste pour valider les profils
@@ -219,9 +259,9 @@ attributs (doc), golden prompts pour le corpus F, thème clair, traduction EN.
 | v0.2 | Réalisme : pressing, transitions, hors-jeu, lisibilité | ✅ |
 | v0.3 | Slices FM, discipline complète, physique d'effort | ✅ |
 | v0.4 | Pilier D (attributs + registre) + Pilier E (stats joueurs) | ⬜ |
-| v0.5 | Pilier A-1 : jeu aérien + calibration physique (10-12 km) | ⬜ |
+| v0.5 | Pilier A-1 : jeu aérien + calibration physique (10-12 km) | 🟡 calibration faite (11,0 km) |
 | v0.6 | Pilier B-1 + C-1 : rôles & devoirs, instructions étendues | ⬜ |
-| v0.7 | Pilier A-2 : phases arrêtées + arbitrage complet | ⬜ |
+| v0.7 | Pilier A-2 : phases arrêtées + arbitrage complet | 🟡 fautes et cartons au niveau |
 | v0.8 | Pilier B-2 + C-2 : formations libres, plans de match, présets, PPM | ⬜ |
 | v0.9 | Pilier F : prompting avant/pendant/après + golden tests | ⬜ |
 | v1.0 | **Cœur certifié** — les six piliers « excellent » | ⬜ |
