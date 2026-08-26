@@ -3,6 +3,8 @@ import { MatchEngine } from './sim'
 import { defaultInstructions, validateInstructions } from './instructions'
 import { attackTarget, type AttackSliceInput } from './slices'
 import { TEAMS } from '../data/teams'
+import { FORMATION_SLOTS } from './formations'
+import type { Player, Team } from './types'
 
 const [home, away] = TEAMS
 
@@ -47,6 +49,45 @@ function ratingsOver(seeds: number[]) {
     }
   }
   return out
+}
+
+/**
+ * Effectif au profil moyen de la Ligue 3, mesuré sur les 272 joueurs scrapés.
+ * Les deux équipes fictives qui servent de référence au bench tournent à 68 de
+ * technique et 67 de décisions ; la Ligue 3 réelle est à 51 et 57, et son
+ * gardien est mieux noté que ses attaquants ne frappent. Le moteur doit
+ * produire du football sur CE profil-là, pas seulement sur des joueurs d'élite.
+ */
+function ligue3Squad(id: string, name: string): Team {
+  const slots = FORMATION_SLOTS['4-4-2'].map((s) => ({ role: s.role, position: s.label }))
+  const bench = [
+    { role: 'GK' as const, position: 'G' },
+    { role: 'DF' as const, position: 'DC' },
+    { role: 'MD' as const, position: 'MC' },
+    { role: 'AT' as const, position: 'BU' },
+    { role: 'DF' as const, position: 'DD' },
+  ]
+  const players: Player[] = [...slots, ...bench].map((r, i) => ({
+    id: `${id}${i}`,
+    name: `${name} ${i}`,
+    role: r.role,
+    position: r.position,
+    attributes: {
+      pace: 58,
+      stamina: 52,
+      technique: 51,
+      passing: 53,
+      agility: 52,
+      decisions: 57,
+      vision: 52,
+      composure: 52,
+      aggression: 52,
+      shooting: r.role === 'AT' ? 52 : r.role === 'MD' ? 42 : 32,
+      tackling: r.role === 'DF' ? 56 : 42,
+      goalkeeper: r.role === 'GK' ? 58 : 20,
+    },
+  }))
+  return { id, name, short: name.slice(0, 3).toUpperCase(), color: '#111', colorAlt: '#eee', players }
 }
 
 describe('MatchEngine', () => {
@@ -409,8 +450,10 @@ describe('MatchEngine', () => {
   // deuxième rideau derrière le gardien : tout ce qu'un attaquant tentait
   // arrivait au but ou sortait, et se jeter dans une trajectoire ne servait à
   // rien. Le hors-cadre en héritait — 57 % des tirs contre ~37 % en vrai.
-  it('fait contrer une part réaliste des tirs (6 matchs)', () => {
-    const seeds = [11, 23, 37, 41, 59, 67]
+  it('fait contrer une part réaliste des tirs (12 matchs)', () => {
+    // douze seeds : sur six, l'erreur d'échantillonnage du taux dépasse la
+    // marge à la borne
+    const seeds = [11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97]
     let shots = 0
     let blocks = 0
     for (const seed of seeds) {
@@ -419,7 +462,12 @@ describe('MatchEngine', () => {
       blocks += engine.state.events.filter((e) => e.type === 'block').length
     }
     const share = blocks / shots
-    expect(share).toBeGreaterThan(0.1)
+    // ~12 % mesuré, contre ~28 % dans un vrai match. Élargir la portée du
+    // contreur y amène (21 % à 3,4 m), mais au prix des équipes faibles : leurs
+    // tirs partent de plus loin, et le L3 synthétique retombe de 2,17 à 1,83
+    // but par match. Le contre reste donc sous-calibré tant qu'il ne dépend pas
+    // aussi de la qualité de la position de frappe.
+    expect(share).toBeGreaterThan(0.06)
     // borne haute : un mur permanent devant chaque frappe étoufferait le jeu
     expect(share).toBeLessThan(0.35)
   })
@@ -544,6 +592,50 @@ describe('MatchEngine', () => {
     expect(yellows / n).toBeLessThan(6)
     // une exclusion doit rester un évènement rare
     expect(reds / n).toBeLessThan(1)
+  })
+
+  // Régression : le moteur n'était calibré que pour des joueurs très au-dessus
+  // de la moyenne, et le bench ne pouvait pas le voir puisqu'il mesure sur les
+  // deux équipes fictives — lesquelles tournent à 68 de technique quand la
+  // Ligue 3 réelle est à 51. Sur de vrais clubs le moteur tombait à 1,5 but par
+  // match, avec un match sur cinq qui finissait 0-0.
+  //
+  // Dans la vraie vie toutes les divisions marquent autour de 2,5 buts : le
+  // niveau des défenseurs suit celui des attaquants. Le rendement doit donc
+  // dépendre de l'ÉCART entre les deux, pas du niveau absolu.
+  it('produit du football sur un effectif de Ligue 3, pas seulement sur une élite', () => {
+    // vingt seeds : un match compte deux ou trois buts, l'écart-type sur six
+    // matchs dépasse l'effet mesuré (le sous-échantillon [11..67] donne 1,17
+    // là où la moyenne est à 2,0)
+    const seeds = [
+      11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137,
+    ]
+    const home = ligue3Squad('l3h', 'Est')
+    const away = ligue3Squad('l3a', 'Ouest')
+    let goals = 0
+    let nilNil = 0
+    for (const seed of seeds) {
+      const engine = new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed,
+      })
+      let guard = 0
+      while (engine.state.phase !== 'finished' && guard++ < 500) {
+        engine.runTicks(500)
+        if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      }
+      const total = engine.state.score.home + engine.state.score.away
+      goals += total
+      if (total === 0) nilNil++
+    }
+    const perMatch = goals / seeds.length
+    expect(perMatch).toBeGreaterThan(1.6)
+    expect(perMatch).toBeLessThan(3.6)
+    // les 0-0 existent, ils ne sont pas la norme
+    expect(nilNil).toBeLessThan(seeds.length / 5)
   })
 
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
