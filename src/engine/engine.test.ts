@@ -519,6 +519,33 @@ describe('MatchEngine', () => {
     expect(mean).toBeLessThan(78)
   })
 
+  // Régression : une faute ne pouvait être sifflée QUE sur un tacle réussi.
+  // Un tacle manqué renvoyait immédiatement et l'attaquant passait sans
+  // conséquence — alors que le tacle mal ajusté est la première source de
+  // fautes sur un terrain. L'arbitre sifflait 7,5 fautes par match contre ~22,
+  // et 1,3 carton contre ~4.
+  it('siffle un nombre réaliste de fautes et de cartons (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let fouls = 0
+    let yellows = 0
+    let reds = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      for (const tms of [engine.state.home, engine.state.away]) {
+        fouls += tms.stats.fouls
+        yellows += tms.stats.yellowCards
+        reds += tms.stats.redCards
+      }
+    }
+    const n = seeds.length
+    expect(fouls / n).toBeGreaterThan(14)
+    expect(fouls / n).toBeLessThan(28)
+    expect(yellows / n).toBeGreaterThan(1.5)
+    expect(yellows / n).toBeLessThan(6)
+    // une exclusion doit rester un évènement rare
+    expect(reds / n).toBeLessThan(1)
+  })
+
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
     let sot = 0
     let shots = 0

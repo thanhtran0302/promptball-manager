@@ -117,14 +117,14 @@ const RATING = {
  * l'a lancée. Au-delà, un but compte comme une action construite. La chaîne est
  * aussi rompue par tout changement de camp.
  *
- * Elle valait 15 s, calibrées quand les joueurs se déplaçaient 30 % plus vite :
- * la phase d'un corner — premier ballon, second ballon, centre recyclé — se
- * jouait dans cette fenêtre. Au rythme corrigé elle en sort, et des buts nés
- * d'un corner comptaient comme des actions construites. C'est une règle
- * d'imputation, pas de jeu : elle ne change aucun but marqué, seulement leur
- * classement.
+ * C'est une règle d'imputation, pas de jeu : elle ne change aucun but marqué,
+ * seulement leur classement. Sa valeur dépend donc de deux choses, et il faut
+ * la relire quand l'une bouge — le rythme des joueurs (à quelle vitesse la
+ * phase d'un corner se joue) et le nombre de remises en jeu par match. Elle
+ * valait 15 s quand les joueurs allaient 30 % plus vite et que l'arbitre
+ * sifflait 7 fautes par match ; au rythme et au volume corrigés, 20 s.
  */
-const SET_PIECE_CHAIN_TICKS = 300
+const SET_PIECE_CHAIN_TICKS = 200
 
 /**
  * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
@@ -177,6 +177,30 @@ const BLOCK_BASE = 0.85
  */
 const EFFORT_RAMP_FLOOR = 0.28
 const EFFORT_RAMP_M = 24
+
+/**
+ * Part des duels qui tournent à la faute, selon que le tacle touche le ballon
+ * ou non. Un tacle manqué est plus souvent sanctionné qu'un tacle propre :
+ * c'est là qu'on prend l'homme.
+ */
+const FOUL_ON_TACKLE = 0.26
+const FOUL_ON_MISSED = 0.3
+
+/** Retenue d'un joueur déjà averti sur son prochain duel. */
+const BOOKED_CAUTION = 0.45
+
+/**
+ * Multiplicateur du taux d'engagement dans un duel. Le moteur produisait ~42
+ * duels par match, contre ~100 dans un vrai match — d'où trop peu de fautes
+ * comme trop peu de tacles, quelle que soit la part sifflée.
+ */
+const DUEL_RATE = 1.7
+
+/**
+ * Position minimale, en espace équipe, à partir de laquelle une remise en jeu
+ * ouvre une chaîne de phase arrêtée. 0,66 = dernier tiers.
+ */
+const SET_PIECE_DANGER_TX = 0.66
 
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
@@ -573,7 +597,7 @@ export class MatchEngine {
 
   /** Touche : le plus proche vient prendre la balle sur la ligne. */
   private throwIn(side: Side, x: number, y: number) {
-    this.markSetPiece(side, STOPPAGE_S.throwIn)
+    this.markSetPieceIfDangerous(side, STOPPAGE_S.throwIn, x, y)
     const st = this.state
     const taker = this.nearestTo(x, y, side)
     if (!taker) return
@@ -1434,14 +1458,25 @@ export class MatchEngine {
       (1.15 - (carrierP.attributes.agility / 99) * 0.6) *
       (1 + support * 0.3) /
       (1 + (carrierP.attributes.technique / 99) * 0.5)
-    p *= staminaFactor(first.stamina)
+    p *= staminaFactor(first.stamina) * DUEL_RATE
     if (!this.rng.chance(p)) return
 
-    // tentative de tacle
-    if (!this.rng.chance(0.68)) return // tacle manqué, l'attaquant passe
+    // Tentative de tacle. Une faute ne pouvait être sifflée QUE sur un tacle
+    // réussi : un tacle manqué renvoyait immédiatement, et l'attaquant passait
+    // sans que rien ne se produise. C'est l'inverse d'un terrain — le tacle mal
+    // ajusté est la première source de fautes, et le moteur ne sifflait que
+    // 7,5 fautes par match contre ~22.
+    const clean = this.rng.chance(0.68)
 
     // faute : modulée par l'agressivité du tacleur et la sévérité de l'arbitre
-    const foulProb = 0.26 * (0.6 + (defP.attributes.aggression / 99) * 0.8) * st.refereeStrictness
+    const foulProb =
+      (clean ? FOUL_ON_TACKLE : FOUL_ON_MISSED) *
+      (0.6 + (defP.attributes.aggression / 99) * 0.8) *
+      st.refereeStrictness *
+      // un joueur déjà averti retient son tacle : sans ça, les fautes se
+      // concentraient sur les mêmes joueurs agressifs et le second jaune
+      // tombait quatre fois trop souvent
+      (first.yellowCards > 0 ? BOOKED_CAUTION : 1)
     if (this.rng.chance(foulProb)) {
       oppTms.stats.fouls++
       first.stats.fouls++
@@ -1451,14 +1486,14 @@ export class MatchEngine {
       // faute dans la surface de réparation → penalty ?
       const goal = this.attackedGoal(carrier.side)
       const inBox = Math.abs(carrier.x - goal.x) < 16.5 && Math.abs(carrier.y - PITCH.W / 2) < 20.16
-      if (inBox && this.rng.chance(0.03)) {
+      if (inBox && this.rng.chance(0.022)) {
         this.awardPenalty(carrier.side)
         return
       }
 
-      // cartons : faute cartonnable (~13 %), dont 4 % de rouges directs
+      // cartons : faute cartonnable (~13 %), dont 2 % de rouges directs
       if (this.rng.chance(0.13 * st.refereeStrictness)) {
-        if (this.rng.chance(0.04)) {
+        if (this.rng.chance(0.02)) {
           this.sendOff(oppSide, first.id, 'direct')
           return
         }
@@ -1473,7 +1508,7 @@ export class MatchEngine {
       }
 
       // coup franc : possession conservée, petit temps de repli
-      this.markSetPiece(carrier.side, STOPPAGE_S.freeKick)
+      this.markSetPieceIfDangerous(carrier.side, STOPPAGE_S.freeKick, carrier.x, carrier.y)
       st.ball.carrierId = carrier.id
       st.possession = carrier.side
       this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.freeKick)
@@ -1481,6 +1516,8 @@ export class MatchEngine {
       this.nextDecisionTick = st.tick + 12
       return
     }
+
+    if (!clean) return // tacle manqué et rien de sifflé : l'attaquant passe
 
     // tacle gagnant
     first.stats.tackles++
@@ -1670,6 +1707,18 @@ export class MatchEngine {
   }
 
   /** Ouvre une chaîne de phase arrêtée au profit de `side`. */
+  /**
+   * Une remise en jeu n'ouvre une chaîne de phase arrêtée que si elle part
+   * assez près du but adverse. Un coup franc dans son propre camp ou une
+   * touche au milieu ne comptent pas comme phase arrêtée dans les statistiques
+   * réelles — les compter faisait grimper la part de buts sur phase arrêtée à
+   * 38 % dès que l'arbitre sifflait un nombre réaliste de fautes.
+   */
+  private markSetPieceIfDangerous(side: Side, stoppageS: number, x: number, y: number) {
+    if (this.toTeamSpace(side, x, y).tx < SET_PIECE_DANGER_TX) return
+    this.markSetPiece(side, stoppageS)
+  }
+
   private markSetPiece(side: Side, stoppageS: number) {
     // la fenêtre court sur le jeu VIVANT qui suit la reprise : comptée depuis
     // l'arrêt, un arrêt long la consommerait entièrement et aucun but ne serait
