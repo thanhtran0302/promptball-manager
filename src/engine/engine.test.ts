@@ -404,6 +404,49 @@ describe('MatchEngine', () => {
     if (clean.length && leaky.length) expect(mean(clean)).toBeGreaterThan(mean(leaky))
   })
 
+  // Régression : le moteur ne contrait que 4 % des tirs, contre ~28 % dans un
+  // vrai match. `blocked` existait dans le type et n'était produit qu'en
+  // deuxième rideau derrière le gardien : tout ce qu'un attaquant tentait
+  // arrivait au but ou sortait, et se jeter dans une trajectoire ne servait à
+  // rien. Le hors-cadre en héritait — 57 % des tirs contre ~37 % en vrai.
+  it('fait contrer une part réaliste des tirs (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let shots = 0
+    let blocks = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      shots += engine.state.home.stats.shots + engine.state.away.stats.shots
+      blocks += engine.state.events.filter((e) => e.type === 'block').length
+    }
+    const share = blocks / shots
+    expect(share).toBeGreaterThan(0.1)
+    // borne haute : un mur permanent devant chaque frappe étoufferait le jeu
+    expect(share).toBeLessThan(0.35)
+  })
+
+  // Un contre laissait toujours le ballon au contreur : il était par
+  // construction le plus proche du point d'impact. Le ballon est dévié, et
+  // l'attaque en récupère une part.
+  it('rend une partie des ballons contrés à l’attaque (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let blocks = 0
+    let attackKeeps = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      const events = engine.state.events
+      for (let i = 0; i < events.length; i++) {
+        if (events[i].type !== 'block') continue
+        blocks++
+        // le contreur est du camp qui défend : si le tir suivant vient de
+        // l'autre camp dans la foulée, l'attaque a gardé le ballon
+        const next = events.slice(i + 1, i + 4).find((e) => e.type === 'shot' || e.type === 'goal')
+        if (next && next.side !== events[i].side) attackKeeps++
+      }
+    }
+    expect(blocks).toBeGreaterThan(0)
+    expect(attackKeeps).toBeGreaterThan(0)
+  })
+
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
     let sot = 0
     let shots = 0

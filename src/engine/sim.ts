@@ -151,6 +151,16 @@ const INTERCEPT_CLOSING_MS = 4.8
  */
 const DEAD_BALL_WALK_MS = 1.4
 
+/**
+ * Contre d'un tir par un défenseur. Le moteur ne contrait que 4 % des tirs,
+ * contre ~28 % dans un vrai match : tout ce qu'un attaquant tentait arrivait
+ * jusqu'au gardien ou sortait du cadre, et se jeter dans une trajectoire ne
+ * servait à rien. `reach` est une envergure de corps ; `base` est la poignée
+ * de calibration du taux.
+ */
+const BLOCK_REACH_M = 2.0
+const BLOCK_BASE = 0.85
+
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
 
@@ -819,8 +829,16 @@ export class MatchEngine {
       }
       this.bumpRating(shooterId, RATING.shotOut)
     } else {
-      // contré : balle libre au point de frappe
-      const winner = this.nearestTo(t.toX, t.toY)
+      // Contré : le ballon rebondit sur le défenseur et repart de quelques
+      // mètres. Sans cette déviation le contreur restait toujours le plus
+      // proche du point d'impact et récupérait à chaque fois — un contre
+      // valait une perte de balle certaine, alors qu'un tir contré revient à
+      // l'attaque environ une fois sur deux.
+      const bx = clamp(t.toX + this.rng.range(-6, 6), 1, PITCH.L - 1)
+      const by = clamp(t.toY + this.rng.range(-6, 6), 1, PITCH.W - 1)
+      st.ball.x = bx
+      st.ball.y = by
+      const winner = this.nearestTo(bx, by)
       if (winner) {
         st.ball.carrierId = winner.id
         st.possession = winner.side
@@ -1217,6 +1235,33 @@ export class MatchEngine {
    * Probabilité de coupe selon la proximité à la ligne et les attributs
    * (vivacité, décisions) ; les longs ballons sont moins coupables (arc).
    */
+  /**
+   * Défenseur qui se jette dans la trajectoire du tir, s'il y en a un. Même
+   * géométrie de couloir que `pickLineInterceptor`, mais un tir ne laisse pas
+   * le temps de venir se placer : le défenseur doit déjà être sur la ligne, et
+   * le contre se tente d'autant mieux qu'il est près du tireur.
+   */
+  private pickShotBlocker(shooter: LivePlayer, goalX: number, goalY: number): LivePlayer | null {
+    const st = this.state
+    const oppSide: Side = shooter.side === 'home' ? 'away' : 'home'
+    const vx = goalX - shooter.x
+    const vy = goalY - shooter.y
+    const len2 = vx * vx + vy * vy
+    if (len2 < 4) return null
+    let best: { player: LivePlayer; prob: number } | null = null
+    for (const o of Object.values(st.players)) {
+      if (!o.onPitch || o.side !== oppSide) continue
+      if (this.player(o.id).role === 'GK') continue // l'arrêt du gardien est résolu à part
+      const t = ((o.x - shooter.x) * vx + (o.y - shooter.y) * vy) / len2
+      if (t <= 0 || t > 1) continue
+      const perp = dist(o.x, o.y, shooter.x + vx * t, shooter.y + vy * t)
+      if (perp > BLOCK_REACH_M) continue
+      const prob = (1 - perp / BLOCK_REACH_M) * BLOCK_BASE * clamp(1 - t, 0.15, 1)
+      if (prob > (best?.prob ?? 0)) best = { player: o, prob }
+    }
+    return best !== null && this.rng.chance(best.prob) ? best.player : null
+  }
+
   private pickLineInterceptor(
     passer: LivePlayer,
     toX: number,
@@ -1274,13 +1319,17 @@ export class MatchEngine {
     // résolution en deux étapes (modèle type OFM) :
     // 1) la frappe est-elle cadrée ? 2) cadrée, entre-t-elle ?
     const mental = (p.attributes.shooting + p.attributes.composure + p.attributes.decisions) / 3
-    let onTarget = clamp(0.45 + ((mental - 50) / 99) * 0.55, 0.15, 0.85)
+    let onTarget = clamp(0.522 + ((mental - 50) / 99) * 0.55, 0.15, 0.85)
     onTarget *= clamp(1.05 - d / 35, 0.35, 1) * angleF // loin et/ou angle fermé : plus dur
     onTarget = clamp(onTarget, 0.08, 0.8)
 
+    // un défenseur sur la trajectoire contre avant que la précision compte
+    const blocker = this.pickShotBlocker(carrier, goal.x, goal.y)
     let outcome: BallTransit['shotOutcome']
-    if (this.rng.chance(onTarget)) {
-      let conv = 0.26 + (p.attributes.shooting - gkAttr) / 150
+    if (blocker) {
+      outcome = 'blocked'
+    } else if (this.rng.chance(onTarget)) {
+      let conv = 0.19 + (p.attributes.shooting - gkAttr) / 150
       if (d < 11) conv *= 1.25 // très proche du but
       conv = clamp(conv, 0.08, 0.55)
       if (this.rng.chance(conv)) outcome = 'goal'
@@ -1298,9 +1347,27 @@ export class MatchEngine {
     )
     this.lastTouchSide = carrier.side
 
-    const tx =
-      outcome === 'off_target' ? goal.x + this.rng.range(-4, 4) * (goal.x === PITCH.L ? -1 : 1) : goal.x
-    const ty = outcome === 'off_target' ? goal.y + this.rng.range(6, 12) * (this.rng.chance(0.5) ? 1 : -1) : goal.y
+    if (blocker) {
+      this.log(
+        'block',
+        `Contré ! ${this.nameOf(blocker.id)} se jette devant la frappe de ${this.nameOf(carrier.id)}.`,
+        blocker.side,
+        blocker.id,
+        blocker.x,
+        blocker.y,
+      )
+    }
+
+    const tx = blocker
+      ? blocker.x
+      : outcome === 'off_target'
+        ? goal.x + this.rng.range(-4, 4) * (goal.x === PITCH.L ? -1 : 1)
+        : goal.x
+    const ty = blocker
+      ? blocker.y
+      : outcome === 'off_target'
+        ? goal.y + this.rng.range(6, 12) * (this.rng.chance(0.5) ? 1 : -1)
+        : goal.y
     const duration = Math.max(2, Math.round(d / 24 / TICK_SEC))
 
     st.ball.carrierId = null

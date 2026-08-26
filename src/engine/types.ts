@@ -232,6 +232,7 @@ export type MatchEventType =
   | 'save'
   | 'off_target'
   | 'tackle'
+  | 'block'
   | 'interception'
   | 'foul'
   | 'yellow_card'
