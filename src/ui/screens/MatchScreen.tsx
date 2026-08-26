@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MAX_SUBS, MAX_SUB_WINDOWS, type MatchEngine } from '../../engine/sim'
-import type { Team, MatchInstructions } from '../../engine/types'
+import { isBreak, type Team, type MatchInstructions } from '../../engine/types'
 import type { LLMSettings } from '../../llm/presets'
 import { MatchController, SPEEDS, type Speed } from '../../game/controller'
 import { CANVAS_H, CANVAS_W, drawMatch, pickPlayer } from '../MatchCanvas'
@@ -66,7 +66,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
   const minute = Math.floor((st.tick * 0.1) / 60)
   const minuteLabel = minute >= 90 ? `90+${minute - 90}'` : `${minute}'`
   const finished = st.phase === 'finished'
-  const halftime = st.phase === 'halftime'
+  const halftime = isBreak(st.phase)
   const kickoffPending = st.tick === 0 && controller.paused && !promptOpen
 
   const openTacticalPause = () => {

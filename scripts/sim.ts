@@ -99,7 +99,7 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 200) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
     }
     const st = engine.state
     agg.goals[0] += st.score.home

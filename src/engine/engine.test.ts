@@ -4,7 +4,7 @@ import { defaultInstructions, validateInstructions } from './instructions'
 import { attackTarget, type AttackSliceInput } from './slices'
 import { TEAMS } from '../data/teams'
 import { FORMATION_SLOTS } from './formations'
-import type { Player, Team } from './types'
+import { HALF_TICKS, TICK_SEC, isBreak, isExtraTime, type Player, type Team } from './types'
 
 const [home, away] = TEAMS
 
@@ -19,7 +19,7 @@ function runFullMatch(seed = 42) {
   let guard = 0
   while (engine.state.phase !== 'finished' && guard++ < 500) {
     engine.runTicks(500)
-    if (engine.state.phase === 'halftime') engine.startSecondHalf()
+    if (engine.state.phase === 'halftime') engine.startNextPeriod()
   }
   return engine
 }
@@ -275,7 +275,7 @@ describe('MatchEngine', () => {
     expect(engine.state.home.subsUsed).toBe(4)
     expect(engine.state.home.subWindows).toBe(3)
     // la reprise n'hérite pas d'une fenêtre restée ouverte
-    engine.startSecondHalf()
+    engine.startNextPeriod()
     engine.runTicks(1)
     expect(engine.makeSub('home', lineup[6], bench[4]).ok).toBe(false)
   })
@@ -305,7 +305,7 @@ describe('MatchEngine', () => {
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 500) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
     }
     const ai = engine.state.away
     expect(ai.subsUsed).toBeGreaterThan(0)
@@ -315,6 +315,34 @@ describe('MatchEngine', () => {
     expect(engine.state.home.subsUsed).toBe(0)
     // et le gardien reste en place
     expect(engine.state.players[ai.lineup[0]].onPitch).toBe(true)
+  })
+
+  it('expose des prédicats de phase cohérents', () => {
+    expect(isBreak('halftime')).toBe(true)
+    expect(isBreak('break_before_extra')).toBe(true)
+    expect(isBreak('extra_halftime')).toBe(true)
+    expect(isBreak('first_half')).toBe(false)
+    expect(isBreak('finished')).toBe(false)
+
+    // la coupure d'avant-prolongation compte comme prolongation : l'IFAB y
+    // ouvre déjà la substitution supplémentaire
+    expect(isExtraTime('break_before_extra')).toBe(true)
+    expect(isExtraTime('extra_first_half')).toBe(true)
+    expect(isExtraTime('extra_second_half')).toBe(true)
+    expect(isExtraTime('second_half')).toBe(false)
+    expect(isExtraTime('halftime')).toBe(false)
+  })
+
+  it('pose periodEndTick sur la fin de la période courante', () => {
+    const engine = subEngine()
+    expect(engine.state.periodEndTick).toBe(HALF_TICKS)
+    let guard = 0
+    while (engine.state.phase !== 'halftime' && guard++ < 100) engine.runTicks(1000)
+    engine.startNextPeriod()
+    expect(engine.state.phase).toBe('second_half')
+    expect(engine.state.periodEndTick).toBe(
+      HALF_TICKS * 2 + Math.round(engine.state.addedTimeSec / TICK_SEC),
+    )
   })
 
   it('les instructions d\'overlap accélèrent la perte d\'endurance', () => {
@@ -405,7 +433,7 @@ describe('MatchEngine', () => {
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 500) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
     }
     expect(engine.state.phase).toBe('finished')
     // l'exclu n'est jamais revenu
@@ -748,7 +776,7 @@ describe('MatchEngine', () => {
       let guard = 0
       while (engine.state.phase !== 'finished' && guard++ < 500) {
         engine.runTicks(500)
-        if (engine.state.phase === 'halftime') engine.startSecondHalf()
+        if (engine.state.phase === 'halftime') engine.startNextPeriod()
       }
       const total = engine.state.score.home + engine.state.score.away
       goals += total

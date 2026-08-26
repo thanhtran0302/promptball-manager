@@ -297,13 +297,45 @@ export interface TeamMatchState {
   stats: TeamMatchStats
 }
 
-export type MatchPhase = 'first_half' | 'halftime' | 'second_half' | 'finished'
+export type MatchPhase =
+  | 'first_half'
+  | 'halftime'
+  | 'second_half'
+  | 'break_before_extra'
+  | 'extra_first_half'
+  | 'extra_halftime'
+  | 'extra_second_half'
+  | 'finished'
+
+/**
+ * Pause : le moteur est gelé jusqu'à un appel explicite à startNextPeriod().
+ * Les trois pauses sont aussi les moments où un remplacement ne consomme
+ * aucune fenêtre (règlement IFAB).
+ */
+export const isBreak = (p: MatchPhase): boolean =>
+  p === 'halftime' || p === 'break_before_extra' || p === 'extra_halftime'
+
+/**
+ * Prolongation, coupure d'avant-prolongation comprise : l'IFAB ouvre la
+ * substitution supplémentaire dès la coupure, pas au coup d'envoi.
+ */
+export const isExtraTime = (p: MatchPhase): boolean =>
+  p === 'break_before_extra' ||
+  p === 'extra_first_half' ||
+  p === 'extra_halftime' ||
+  p === 'extra_second_half'
 
 export interface MatchState {
   tick: number
   phase: MatchPhase
   /** Temps additionnel 2e mi-temps en secondes de jeu */
   addedTimeSec: number
+  /**
+   * Tick de fin de la période en cours. Porté en état plutôt que recalculé :
+   * la prolongation devrait sinon retrouver le temps additionnel de la
+   * seconde mi-temps à chaque tick pour connaître son origine.
+   */
+  periodEndTick: number
   /** Ticks pendant lesquels le ballon n'était pas en jeu (remises en jeu) */
   deadTicks: number
   /** Personnalité de l'arbitre : module fautes sifflées et cartons (0,8 – 1,3) */
@@ -329,3 +361,4 @@ export const PITCH = {
 /** 1 tick = 0,1 s de temps de jeu */
 export const TICK_SEC = 0.1
 export const HALF_TICKS = 27_000 // 45 min
+export const EXTRA_HALF_TICKS = 9_000 // 15 min

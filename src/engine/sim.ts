@@ -29,6 +29,7 @@ import {
   HALF_TICKS,
   PITCH,
   TICK_SEC,
+  isBreak,
   type AttBehavior,
   type BallTransit,
   type Formation,
@@ -384,6 +385,7 @@ export class MatchEngine {
       tick: 0,
       phase: 'first_half',
       addedTimeSec: Math.round(this.rng.range(30, 180)),
+      periodEndTick: HALF_TICKS,
       deadTicks: 0,
       refereeStrictness: this.rng.range(0.8, 1.3),
       score: { home: 0, away: 0 },
@@ -507,16 +509,11 @@ export class MatchEngine {
 
   tick(): void {
     const st = this.state
-    if (st.phase === 'finished' || st.phase === 'halftime') return
+    if (st.phase === 'finished' || isBreak(st.phase)) return
     st.tick++
 
-    if (st.tick === HALF_TICKS) {
-      this.halftime()
-      return
-    }
-    const fullTimeTick = HALF_TICKS * 2 + Math.round(st.addedTimeSec / TICK_SEC)
-    if (st.tick >= fullTimeTick) {
-      this.fulltime()
+    if (st.tick >= st.periodEndTick) {
+      this.endOfPeriod()
       return
     }
     this.runAutoSubs()
@@ -2103,28 +2100,36 @@ export class MatchEngine {
     this.log('kickoff', `Coup d'envoi — ${this.tms(kickingSide).team.short} engage.`, kickingSide)
   }
 
-  private halftime() {
+  /** Fin de période : pause, ou coup de sifflet final. */
+  private endOfPeriod() {
     const st = this.state
-    st.phase = 'halftime'
     st.ball.carrierId = null
     st.ball.transit = null
-    this.log(
-      'halftime',
-      `Mi-temps : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
-    )
-    // tick() sort dès la bascule de phase : le rendez-vous de la mi-temps doit
-    // être déclenché ici, sinon le coach automatique ne le voit jamais
-    this.runAutoSubs()
+    if (st.phase === 'first_half') {
+      st.phase = 'halftime'
+      this.log(
+        'halftime',
+        `Mi-temps : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
+      )
+      this.runAutoSubs()
+      return
+    }
+    this.fulltime()
   }
 
   private runAutoSubs() {
     for (const side of this.autoSubSides) runAutoSub(this, side, this.autoSubDone)
   }
 
-  startSecondHalf() {
-    if (this.state.phase !== 'halftime') return
-    this.state.phase = 'second_half'
-    this.resetPositions('away')
+  /** Reprise après une pause : enchaîne sur la période suivante. */
+  startNextPeriod() {
+    const st = this.state
+    if (!isBreak(st.phase)) return
+    if (st.phase === 'halftime') {
+      st.phase = 'second_half'
+      st.periodEndTick = HALF_TICKS * 2 + Math.round(st.addedTimeSec / TICK_SEC)
+      this.resetPositions('away')
+    }
   }
 
   private fulltime() {
@@ -2205,7 +2210,7 @@ export class MatchEngine {
    * aucune : le règlement l'offre en plus des trois.
    */
   private opensSubWindow(tms: TeamMatchState): boolean {
-    return this.state.phase !== 'halftime' && tms.lastSubTick !== this.state.tick
+    return !isBreak(this.state.phase) && tms.lastSubTick !== this.state.tick
   }
 
   /** Vrai si un remplacement de plus est réglementairement possible. */
@@ -2253,7 +2258,7 @@ export class MatchEngine {
     if (newWindow) tms.subWindows++
     // la mi-temps ne mémorise pas son tick : sinon la reprise hériterait d'une
     // fenêtre déjà ouverte et le premier changement du retour serait gratuit
-    if (st.phase !== 'halftime') tms.lastSubTick = st.tick
+    if (!isBreak(st.phase)) tms.lastSubTick = st.tick
     this.log('sub', `🔁 Remplacement ${tms.team.short} : ${this.nameOf(inId)} entre à la place de ${this.nameOf(outId)}.`, side, inId)
     return { ok: true }
   }

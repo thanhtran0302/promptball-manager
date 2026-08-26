@@ -7,7 +7,7 @@
 // contraintes du bench.
 
 import type { MatchEngine } from './sim'
-import { TICK_SEC, type Side } from './types'
+import { TICK_SEC, isBreak, type Side } from './types'
 
 /**
  * Usure minimale, en points de fraîcheur perdus, pour qu'une sortie vaille le
@@ -39,7 +39,7 @@ export function runAutoSub(engine: MatchEngine, side: Side, done: Set<string>): 
   const st = engine.state
 
   let trigger: string | null = null
-  if (st.phase === 'halftime') trigger = 'ht'
+  if (isBreak(st.phase)) trigger = 'ht'
   else if (st.phase === 'first_half' || st.phase === 'second_half') {
     const minute = Math.floor((st.tick * TICK_SEC) / 60)
     for (const m of TRIGGER_MINUTES) if (minute >= m) trigger = `m${m}`

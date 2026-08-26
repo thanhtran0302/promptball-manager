@@ -3,7 +3,7 @@
 
 import { MatchEngine } from '../engine/sim'
 import { MENTALITY_LEVEL, PRESSINGS, MENTALITIES } from '../engine/instructions'
-import { TICK_SEC, type MatchInstructions, type MatchPhase, type Side } from '../engine/types'
+import { TICK_SEC, isBreak, type MatchInstructions, type MatchPhase, type Side } from '../engine/types'
 
 /** À ×1, 1 minute de jeu = 30 secondes réelles (match ≈ 45 min réelles).
  *  ×0.5 = temps réel 1:1 (match ≈ 90 min). */
@@ -52,7 +52,7 @@ export class MatchController {
       this.lastTs = nowMs
       return
     }
-    if (this.engine.state.phase === 'halftime') {
+    if (isBreak(this.engine.state.phase)) {
       this.paused = true
       this.lastTs = nowMs
       this.onHalftime?.()
@@ -71,7 +71,7 @@ export class MatchController {
         // tick() peut faire évoluer la phase : lecture sans narrowing TS
         const phase = this.currentPhase()
         this.maybeAiAdjust()
-        if (phase === 'halftime') {
+        if (isBreak(phase)) {
           this.paused = true
           this.onHalftime?.()
           return
@@ -115,8 +115,8 @@ export class MatchController {
   }
 
   resume() {
-    if (this.engine.state.phase === 'halftime') {
-      this.engine.startSecondHalf()
+    if (isBreak(this.engine.state.phase)) {
+      this.engine.startNextPeriod()
     }
     this.lastTs = null
     this.paused = false
