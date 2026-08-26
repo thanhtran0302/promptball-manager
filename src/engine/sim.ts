@@ -134,6 +134,15 @@ const PASS_SPEED = { short: 13, long: 19 } as const
 const INTERCEPT_REACTION_S = 0.24
 const INTERCEPT_CLOSING_MS = 4.8
 
+/**
+ * Vitesse d'un joueur ballon mort, en m/s. Pendant un arrêt de jeu le moteur
+ * coupait les décisions mais laissait `movePlayers` tourner à pleine vitesse :
+ * les joueurs sprintaient pendant les remises en jeu, la forme d'équipe se
+ * dissolvait avant que le ballon revienne, et l'arrêt comptait quand même dans
+ * les kilomètres parcourus et dans la fatigue. Ballon mort, on marche.
+ */
+const DEAD_BALL_WALK_MS = 1.4
+
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
 
@@ -144,13 +153,13 @@ const GOAL_LINE_OUT_M = 10
  * temps mort contre ~30 % dans un vrai match.
  */
 const STOPPAGE_S = {
-  throwIn: 10,
-  goalKick: 16,
-  corner: 14,
-  freeKick: 12,
-  penalty: 24,
-  keeperRestart: 8,
-  kickoff: 30,
+  throwIn: 18,
+  goalKick: 25,
+  corner: 30,
+  freeKick: 25,
+  penalty: 55,
+  keeperRestart: 12,
+  kickoff: 65,
 } as const
 
 /** Secondes -> ticks. */
@@ -1408,6 +1417,7 @@ export class MatchEngine {
 
   private movePlayers() {
     const st = this.state
+    const deadBall = st.tick < this.freezeUntilTick
     this.updatePhaseAndPressers()
 
     // changement de camp : les comportements choisis n'ont plus de sens
@@ -1471,7 +1481,8 @@ export class MatchEngine {
                 ? 1.5
                 : 3.5
       const effort = p.role === 'GK' ? 0.55 : this.effortFor(lp, d, isCarrier)
-      const vmax = vmaxFull * effort
+      // ballon mort : on se replace au pas, on ne court pas
+      const vmax = deadBall ? DEAD_BALL_WALK_MS : vmaxFull * effort
       let speedRatio = 0
       if (d > deadZone) {
         const step = Math.min(d - deadZone * 0.5, vmax * TICK_SEC)

@@ -322,6 +322,52 @@ describe('MatchEngine', () => {
     expect(mean(shooters)).toBeLessThan(mean(abstainers))
   })
 
+  // Régression : les durées d'arrêt de jeu étaient environ deux fois trop
+  // courtes (touche 10 s, six mètres 16 s, corner 14 s), et le moteur jouait
+  // 74 minutes effectives contre ~55 dans un vrai match. Toutes les mesures
+  // « par match » en héritaient — le taux de tir par minute de jeu effectif,
+  // lui, était déjà juste (0,476 contre 0,473).
+  it('laisse le ballon mort près d’un tiers du match (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let dead = 0
+    let total = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      dead += engine.state.deadTicks
+      total += engine.state.tick
+    }
+    const ratio = dead / total
+    expect(ratio).toBeGreaterThan(0.25)
+    expect(ratio).toBeLessThan(0.38)
+  })
+
+  // Régression : `movePlayers` tournait pendant le gel des remises en jeu.
+  // Les joueurs sprintaient ballon mort — la forme d'équipe se dissolvait
+  // avant que le corner soit tiré, et l'arrêt comptait quand même dans les
+  // kilomètres. 18,1 km par joueur de champ avant, 14,0 après.
+  it('ne fait pas courir les joueurs ballon mort (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let metres = 0
+    let count = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      for (const tms of [engine.state.home, engine.state.away]) {
+        for (const id of tms.lineup) {
+          const player = tms.team.players.find((p) => p.id === id)!
+          if (player.role === 'GK') continue
+          metres += engine.state.players[id].stats.distance
+          count++
+        }
+      }
+    }
+    const km = metres / count / 1000
+    // la cible du Pilier A est 9-12 km : la borne haute reste large tant que
+    // le chantier « possessions réalistes » n'est pas fait, mais un joueur qui
+    // court pendant les arrêts la repasse aussitôt
+    expect(km).toBeLessThan(16.5)
+    expect(km).toBeGreaterThan(8)
+  })
+
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {
     let sot = 0
     let shots = 0
