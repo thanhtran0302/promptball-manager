@@ -114,12 +114,16 @@ Chantiers :
       construction vs phase finale
 - [ ] **Formations libres et asymétriques** : glisser-déposer des postes, losange,
       3-2-4-1, import/export JSON
+- [x] **Remplacements au règlement National** : 5 joueurs, 3 fenêtres maximum, les
+      changements de la mi-temps hors quota. Une fenêtre = une interruption, donc tous
+      les changements posés au même tick n'en consomment qu'une. Le coach automatique
+      (`src/engine/autoSub.ts`) fait enfin tourner l'IA — 4 changements en 2 fenêtres
+      par match, fraîcheur minimale de fin de match remontée de 65,6 à 70,0. Un joueur
+      remplacé ne peut plus revenir en jeu
 - [ ] **Plans de match multi-étapes** : « si mené à la 60', 4-2-4 ; si rouge, 5-4-0 »
       — déclencheurs score/minute/carton/fatigue, IA adverse avec ses propres plans.
-      Devenu urgent : la fatigue mord désormais (fraîcheur ~70 en fin de match, jusqu'à
-      60 pour les plus sollicités) et **aucun remplacement n'est jamais effectué** côté
-      IA — zéro sur vingt matchs. Le plafond est aussi resté à 3 remplacements, contre 5
-      au règlement moderne
+      Le coach automatique ne connaît que la fatigue : il ne réagit ni au score, ni aux
+      cartons, et ses rendez-vous sont fixes (mi-temps, 60', 75')
 - [ ] **Styles présets** : 8-10 styles historiques (tiki-taka, gegenpress, catenaccio,
       route one, bus + contres…) promptables en une phrase, affinables ensuite
 

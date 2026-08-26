@@ -92,6 +92,9 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
       homeInstructions: structuredClone(homeInstr),
       awayInstructions: structuredClone(awayInstr),
       seed: 1000 + i * 7919,
+      // les deux camps sont pilotés par le moteur : sans coach automatique, la
+      // fatigue de fin de match mesurée ici ne correspond à aucun vrai match
+      autoSubSides: ['home', 'away'],
     })
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 200) {
@@ -119,27 +122,25 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
     agg.yellows[1] += st.away.stats.yellowCards
     agg.reds += st.home.stats.redCards + st.away.stats.redCards
     agg.pens += st.home.stats.penalties + st.away.stats.penalties
-    // km moyens par joueur de champ titulaire (cible réaliste : 9-12 km)
+    // km par poste de champ sur l'ensemble du match (cible réaliste : 9-12 km).
+    // On somme tous les joueurs ayant foulé la pelouse, remplaçants compris, puis
+    // on divise par les dix postes de champ. Compter les joueurs de tms.lineup
+    // mesurerait ceux qui ont FINI le match : makeSub y écrit l'entrant, si bien
+    // qu'un remplaçant de la 75e (3 km) y figure pendant que le titulaire qu'il
+    // remplace (9 km) en disparaît. La métrique n'était juste que tant que
+    // personne ne remplaçait jamais.
     let kmSum = 0
-    let kmCount = 0
+    let slots = 0
     for (const tms of [st.home, st.away]) {
-      for (const id of tms.lineup) {
-        const p = tms.team.players.find((pl) => pl.id === id)
-        if (!p || p.role === 'GK') continue
-        kmSum += st.players[id].stats.distance
-        kmCount++
+      for (const p of tms.team.players) {
+        if (p.role === 'GK') continue
+        kmSum += st.players[p.id].stats.distance
+        agg.sprintTicks += st.players[p.id].stats.sprintTicks
+        agg.runningTicks += st.players[p.id].stats.runningTicks
       }
+      slots += 10
     }
-    agg.km += kmSum / Math.max(kmCount, 1)
-    // sprint : agrégé sur tous les joueurs de champ, gardien exclu
-    for (const tms of [st.home, st.away]) {
-      for (const id of tms.lineup) {
-        const p = tms.team.players.find((pl) => pl.id === id)
-        if (!p || p.role === 'GK') continue
-        agg.sprintTicks += st.players[id].stats.sprintTicks
-        agg.runningTicks += st.players[id].stats.runningTicks
-      }
-    }
+    agg.km += kmSum / slots
     agg.deadTicks += st.deadTicks
     agg.totalTicks += st.tick
     agg.setPieceGoals += st.home.stats.setPieceGoals + st.away.stats.setPieceGoals
@@ -191,7 +192,7 @@ const CRITERIA: Criterion[] = [
   { name: 'Tirs / équipe', value: (a, n) => (a.shots[0] + a.shots[1]) / (2 * n), min: 11, max: 15, unit: '' },
   { name: 'Tirs cadrés', value: (a) => ((a.sot[0] + a.sot[1]) / Math.max(a.shots[0] + a.shots[1], 1)) * 100, min: 35, max: 42, unit: '%' },
   { name: 'Passes réussies', value: (a, n) => a.passesOk / n, min: 82, max: 86, unit: '%' },
-  { name: 'Distance / joueur', value: (a, n) => a.km / n / 1000, min: 9, max: 12, unit: ' km' },
+  { name: 'Distance / poste', value: (a, n) => a.km / n / 1000, min: 9, max: 12, unit: ' km' },
   { name: 'Sprint / temps de course', value: (a) => (a.sprintTicks / Math.max(a.runningTicks, 1)) * 100, min: 0, max: 10, unit: '%' },
   // la ROADMAP dit « ~30 % » : lu comme 25-35
   { name: 'Temps morts', value: (a) => (a.deadTicks / Math.max(a.totalTicks, 1)) * 100, min: 25, max: 35, unit: '%' },

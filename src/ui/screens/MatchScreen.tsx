@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { MatchEngine } from '../../engine/sim'
+import { MAX_SUBS, MAX_SUB_WINDOWS, type MatchEngine } from '../../engine/sim'
 import type { Team, MatchInstructions } from '../../engine/types'
 import type { LLMSettings } from '../../llm/presets'
 import { MatchController, SPEEDS, type Speed } from '../../game/controller'
@@ -87,7 +87,12 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
     setSubFor(null)
   }
 
-  const bench = userTeam.players.filter((p) => !st.home.lineup.includes(p.id))
+  // la règle vit dans le moteur (5 joueurs, 3 fenêtres, mi-temps offerte) :
+  // la dupliquer ici la ferait diverger au premier ajustement
+  const canSub = engine.canSub('home')
+  const bench = userTeam.players.filter(
+    (p) => !st.home.lineup.includes(p.id) && !st.players[p.id].subbedOff && !st.players[p.id].sentOff,
+  )
 
   return (
     <div className="screen match">
@@ -232,8 +237,14 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
 
           <section className="panel">
             <h4>
-              Endurance — {userTeam.short} <span className="muted small">({engine.state.home.subsUsed}/3 remplacements)</span>
+              Endurance — {userTeam.short}{' '}
+              <span className="muted small">
+                ({st.home.subsUsed}/{MAX_SUBS} remplacements · {st.home.subWindows}/{MAX_SUB_WINDOWS} fenêtres)
+              </span>
             </h4>
+            {halftime && !finished && (
+              <p className="muted small">Mi-temps : les changements ne consomment pas de fenêtre.</p>
+            )}
             {subError && <p className="errors">✗ {subError}</p>}
             <ul className="stamina-list">
               {st.home.lineup.map((id) => {
@@ -249,7 +260,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
                       <span style={{ width: `${lp.stamina}%` }} />
                     </div>
                     <span className="st-val">{Math.round(lp.stamina)}</span>
-                    {!finished && !halftime && engine.state.home.subsUsed < 3 && (
+                    {canSub && (
                       <button className="icon-btn" title="Remplacer" onClick={() => setSubFor(subFor === id ? null : id)}>
                         🔁
                       </button>

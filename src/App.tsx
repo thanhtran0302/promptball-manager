@@ -40,6 +40,7 @@ export default function App() {
         homeInstructions: instr,
         awayInstructions: defaultInstructions(),
         seed,
+        autoSubSides: ['away'],
       }),
     )
     setMatchVersion((v) => v + 1)
@@ -56,6 +57,7 @@ export default function App() {
         homeInstructions: engine.state.home.instructions,
         awayInstructions: engine.state.away.instructions,
         seed,
+        autoSubSides: ['away'],
       }),
     )
     setMatchVersion((v) => v + 1)

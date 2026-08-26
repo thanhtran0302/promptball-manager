@@ -24,6 +24,44 @@ function runFullMatch(seed = 42) {
   return engine
 }
 
+/**
+ * Le banc de teams.ts ne compte que quatre joueurs de champ : trop peu pour
+ * éprouver le plafond de cinq remplacements. On l'étoffe avec des doublures
+ * volontairement médiocres, qui ne peuvent donc pas prendre une place de
+ * titulaire dans assignSlots.
+ */
+const deepHome: Team = (() => {
+  const model = home.players.find((p) => p.role === 'MD')!
+  const attributes = { ...model.attributes }
+  for (const k of Object.keys(attributes) as (keyof typeof attributes)[]) {
+    attributes[k] = Math.min(attributes[k], 35)
+  }
+  const extra: Player[] = Array.from({ length: 4 }, (_, i) => ({
+    ...model,
+    id: `hsub${i}`,
+    name: `Doublure ${i}`,
+    attributes,
+  }))
+  return { ...home, players: [...home.players, ...extra] }
+})()
+
+function subEngine() {
+  return new MatchEngine({
+    home: deepHome,
+    away,
+    homeInstructions: defaultInstructions(),
+    awayInstructions: defaultInstructions(),
+    seed: 5,
+  })
+}
+
+/** Remplaçants de champ disponibles, dans l'ordre de l'effectif. */
+function benchIds(engine: MatchEngine): string[] {
+  return deepHome.players
+    .filter((p) => !engine.state.home.lineup.includes(p.id) && p.role !== 'GK')
+    .map((p) => p.id)
+}
+
 /** Notes de tous les titulaires sur plusieurs matchs, avec de quoi les qualifier. */
 function ratingsOver(seeds: number[]) {
   const out: {
@@ -172,26 +210,111 @@ describe('MatchEngine', () => {
     expect(onPitch).toHaveLength(11)
   })
 
-  it('gère les remplacements : 3 max, banc/terrain vérifiés', () => {
+  it('gère les remplacements : 5 joueurs max, banc/terrain vérifiés', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    // cinq joueurs doivent tenir dans trois fenêtres : 2 + 2 + 1
+    let n = 0
+    for (const perWindow of [2, 2, 1]) {
+      engine.runTicks(1) // un tick entre chaque groupe = une nouvelle fenêtre
+      for (let k = 0; k < perWindow; k++, n++) {
+        expect(engine.makeSub('home', lineup[n + 1], bench[n]).ok).toBe(true)
+      }
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+    expect(engine.state.home.subWindows).toBe(3)
+    // 6e joueur refusé, même dans une fenêtre déjà ouverte
+    expect(engine.makeSub('home', lineup[7], bench[5]).ok).toBe(false)
+    // entrant déjà sur le terrain refusé
+    expect(engine.makeSub('away', engine.state.away.lineup[0], engine.state.away.lineup[1]).ok).toBe(false)
+  })
+
+  it('plafonne à 3 fenêtres de remplacement', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    for (let i = 0; i < 3; i++) {
+      engine.runTicks(1)
+      expect(engine.makeSub('home', lineup[i + 1], bench[i]).ok).toBe(true)
+    }
+    expect(engine.state.home.subWindows).toBe(3)
+    // 4e fenêtre refusée, alors qu'il reste deux joueurs remplaçables
+    engine.runTicks(1)
+    const r = engine.makeSub('home', lineup[5], bench[3])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/fenêtre/)
+    expect(engine.state.home.subsUsed).toBe(3)
+  })
+
+  it('plusieurs changements dans le même tick ne consomment qu\'une fenêtre', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    engine.runTicks(1)
+    expect(engine.makeSub('home', lineup[1], bench[0]).ok).toBe(true)
+    expect(engine.makeSub('home', lineup[2], bench[1]).ok).toBe(true)
+    expect(engine.makeSub('home', lineup[3], bench[2]).ok).toBe(true)
+    expect(engine.state.home.subsUsed).toBe(3)
+    expect(engine.state.home.subWindows).toBe(1)
+  })
+
+  it('les changements de la mi-temps ne consomment aucune fenêtre', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    for (let i = 0; i < 3; i++) {
+      engine.runTicks(1)
+      expect(engine.makeSub('home', lineup[i + 1], bench[i]).ok).toBe(true)
+    }
+    let guard = 0
+    while (engine.state.phase !== 'halftime' && guard++ < 100) engine.runTicks(1000)
+    expect(engine.state.phase).toBe('halftime')
+    // les trois fenêtres sont épuisées, et pourtant le changement passe
+    expect(engine.makeSub('home', lineup[5], bench[3]).ok).toBe(true)
+    expect(engine.state.home.subsUsed).toBe(4)
+    expect(engine.state.home.subWindows).toBe(3)
+    // la reprise n'hérite pas d'une fenêtre restée ouverte
+    engine.startSecondHalf()
+    engine.runTicks(1)
+    expect(engine.makeSub('home', lineup[6], bench[4]).ok).toBe(false)
+  })
+
+  it('un joueur remplacé ne peut pas revenir en jeu', () => {
+    const engine = subEngine()
+    const outId = engine.state.home.lineup[3]
+    const bench = benchIds(engine)
+    engine.runTicks(1)
+    expect(engine.makeSub('home', outId, bench[0]).ok).toBe(true)
+    expect(engine.state.players[outId].subbedOff).toBe(true)
+    engine.runTicks(1)
+    const back = engine.makeSub('home', engine.state.home.lineup[4], outId)
+    expect(back.ok).toBe(false)
+    expect(back.error).toMatch(/déjà été remplacé/)
+  })
+
+  it('le coach automatique remplace ses joueurs émoussés, dans les limites', () => {
     const engine = new MatchEngine({
       home,
       away,
       homeInstructions: defaultInstructions(),
       awayInstructions: defaultInstructions(),
       seed: 5,
+      autoSubSides: ['away'],
     })
-    const lineup = engine.state.home.lineup
-    const bench = home.players
-      .filter((p) => !lineup.includes(p.id) && p.role !== 'GK')
-      .map((p) => p.id)
-    expect(engine.makeSub('home', lineup[3], bench[0]).ok).toBe(true)
-    expect(engine.makeSub('home', lineup[4], bench[1]).ok).toBe(true)
-    expect(engine.makeSub('home', lineup[5], bench[2]).ok).toBe(true)
-    // 4e refusé
-    const r = engine.makeSub('home', lineup[6], bench[3] ?? bench[0])
-    expect(r.ok).toBe(false)
-    // entrant déjà sur le terrain refusé
-    expect(engine.makeSub('away', engine.state.away.lineup[0], engine.state.away.lineup[1]).ok).toBe(false)
+    let guard = 0
+    while (engine.state.phase !== 'finished' && guard++ < 500) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+    }
+    const ai = engine.state.away
+    expect(ai.subsUsed).toBeGreaterThan(0)
+    expect(ai.subsUsed).toBeLessThanOrEqual(5)
+    expect(ai.subWindows).toBeLessThanOrEqual(3)
+    // le camp humain n'est jamais touché par le coach automatique
+    expect(engine.state.home.subsUsed).toBe(0)
+    // et le gardien reste en place
+    expect(engine.state.players[ai.lineup[0]].onPitch).toBe(true)
   })
 
   it('les instructions d\'overlap accélèrent la perte d\'endurance', () => {
