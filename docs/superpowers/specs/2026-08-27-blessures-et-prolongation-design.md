@@ -51,7 +51,9 @@ bench.
 `EXTRA_HALF_TICKS = 9_000` (15 minutes à 10 Hz).
 
 `MatchState.periodEndTick` porte le tick de fin de la période en cours et est
-posé à chaque transition. Sans lui, chaque tick de prolongation devrait
+posé à chaque transition : `HALF_TICKS` pour la première mi-temps,
+`HALF_TICKS * 2 + addedTimeSec / TICK_SEC` pour la seconde, puis
+`+ EXTRA_HALF_TICKS` à l'entrée de chaque période de prolongation. Sans lui, chaque tick de prolongation devrait
 recalculer le temps additionnel de la seconde mi-temps pour retrouver son
 origine.
 
@@ -110,6 +112,10 @@ avant l'appel à `updateStamina`. Il ralentit et se vide plus vite, donc le
 coach automatique le sortira de lui-même au prochain rendez-vous : aucune
 règle dédiée n'est nécessaire pour ça.
 
+Un `knock` ne guérit pas : la dégradation court jusqu'à la fin du match ou
+jusqu'à la sortie du joueur. Un joueur déjà `knock` reste exposé au risque et
+peut passer à `out` lors d'un tirage ultérieur ; l'inverse est impossible.
+
 **`out`** — le joueur quitte immédiatement le terrain. `onPitch` passe à faux,
 le poste reste dans `lineup` pour ne pas casser l'assignation des slots. C'est
 exactement la machinerie de `sendOff`, avec une autre cause. L'équipe joue à
@@ -140,7 +146,7 @@ et le taux de touchés se calibrent indépendamment.
 de match, soit ~0,26 sortie par match) :
 
 - **0,25 à 0,45 sortie sur blessure par match**, toutes équipes confondues
-- **0,8 à 1,6 touchés par match**
+- **0,8 à 1,6 touchés par match**, toutes équipes confondues également
 
 Les constantes sont calibrées par mesure, et les valeurs obtenues consignées
 dans le commentaire qui les porte — comme les seuils du coach automatique.
