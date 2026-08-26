@@ -22,6 +22,33 @@ function runFullMatch(seed = 42) {
   return engine
 }
 
+/** Notes de tous les titulaires sur plusieurs matchs, avec de quoi les qualifier. */
+function ratingsOver(seeds: number[]) {
+  const out: {
+    rating: number
+    goals: number
+    assists: number
+    shots: number
+    sentOff: boolean
+  }[] = []
+  for (const seed of seeds) {
+    const engine = runFullMatch(seed)
+    for (const tms of [engine.state.home, engine.state.away]) {
+      for (const id of tms.lineup) {
+        const lp = engine.state.players[id]
+        out.push({
+          rating: lp.stats.rating,
+          goals: lp.stats.goals,
+          assists: lp.stats.assists,
+          shots: lp.stats.shots,
+          sentOff: lp.sentOff,
+        })
+      }
+    }
+  }
+  return out
+}
+
 describe('MatchEngine', () => {
   it('est déterministe : même seed ⇒ même match', () => {
     const a = runFullMatch(1234)
@@ -243,6 +270,56 @@ describe('MatchEngine', () => {
     // but sur penalty bien compté
     const goalEv = engine.state.events.find((e) => e.type === 'goal' && e.message.includes('penalty'))
     if (goalEv) expect(engine.state.score.home).toBe(before + 1)
+  })
+
+  // Régression : le barème des notes payait la routine. Mesuré site par site,
+  // un joueur dérivait de +2,15 par match depuis 6,0 — dont 93 % venus des
+  // passes réussies, des récupérations et des passes coupées. La médiane
+  // finissait à 7,98 et 9 % des joueurs tapaient 10,0 à CHAQUE match : dans le
+  // haut de l'échelle la note ne distinguait plus rien.
+  it('produit des notes qui ne saturent pas le plafond (6 matchs)', () => {
+    const ratings = ratingsOver([11, 23, 37, 41, 59, 67]).map((r) => r.rating)
+    const sorted = [...ratings].sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
+    const capped = ratings.filter((r) => r >= 9.99).length / ratings.length
+
+    // un plafond atteint reste possible (triplé), il ne doit pas être courant
+    expect(capped).toBeLessThan(0.02)
+    // et la note d'un titulaire ordinaire doit rester proche de la base
+    expect(median).toBeGreaterThan(6)
+    expect(median).toBeLessThan(7.2)
+  })
+
+  // Régression : le tir dans le jeu était noté à l'envers — rater rapportait
+  // +0,1, marquer rapportait 0 — et le penalty marqué valait +1,8 contre +1,0
+  // pour un but construit. La note doit suivre ce qui décide le match.
+  it('note mieux les joueurs décisifs (6 matchs)', () => {
+    const all = ratingsOver([11, 23, 37, 41, 59, 67])
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1)
+    const scorers = all.filter((r) => r.goals >= 1).map((r) => r.rating)
+    const quiet = all.filter((r) => r.goals === 0 && r.assists === 0).map((r) => r.rating)
+    const sentOff = all.filter((r) => r.sentOff).map((r) => r.rating)
+
+    expect(scorers.length).toBeGreaterThan(0)
+    expect(mean(scorers)).toBeGreaterThan(mean(quiet) + 0.5)
+    // une exclusion doit coûter, pas seulement priver de temps de jeu
+    if (sentOff.length) expect(mean(sentOff)).toBeLessThan(6)
+  })
+
+  // Témoin de l'inversion : le tir dans le jeu rapportait +0,1 quand il ratait
+  // et 0 quand il rentrait. Un joueur qui multipliait les tentatives sans rien
+  // marquer montait donc dans le classement — sur ces six seeds, +0,73 de plus
+  // que ceux qui n'ont pas tiré du tout.
+  it('ne récompense pas les tirs stériles (6 matchs)', () => {
+    const barren = ratingsOver([11, 23, 37, 41, 59, 67]).filter(
+      (r) => r.goals === 0 && r.assists === 0,
+    )
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1)
+    const shooters = barren.filter((r) => r.shots >= 3).map((r) => r.rating)
+    const abstainers = barren.filter((r) => r.shots === 0).map((r) => r.rating)
+
+    expect(shooters.length).toBeGreaterThan(0)
+    expect(mean(shooters)).toBeLessThan(mean(abstainers))
   })
 
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {

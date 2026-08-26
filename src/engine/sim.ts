@@ -59,6 +59,52 @@ const SPRINT_WALK = 2
 const SPRINT_SPEED = 7
 
 /**
+ * Barème des notes. Une note part de 6,0 et se gagne sur ce qui change le
+ * match, pas sur le fait de toucher le ballon.
+ *
+ * L'ancien barème dérivait de +2,15 par joueur et par match — mesuré site par
+ * site — dont 93 % venus des passes réussies, des récupérations et des passes
+ * coupées, c'est-à-dire d'actions qu'un titulaire répète cinquante fois. La
+ * médiane finissait à 7,98 et 9 % des joueurs tapaient le plafond de 10,0 à
+ * chaque match : dans le haut de l'échelle, la note ne distinguait plus rien.
+ *
+ * Les poids de routine sont donc calés pour qu'un match complet d'actions
+ * ordinaires vaille environ +0,5, et les actions décisives portent le reste.
+ * Les regrouper ici est le point : leur somme se relit, alors qu'éparpillés
+ * sur quatorze sites d'appel personne ne voyait le total.
+ */
+const RATING = {
+  base: 6,
+  min: 3,
+  max: 10,
+  /** Routine — répétée des dizaines de fois par match, donc pondérée en conséquence. */
+  passOk: 0.003,
+  passFailed: -0.006,
+  laneInterception: 0.08,
+  looseBallRecovery: 0.04,
+  tackleWon: 0.1,
+  dispossessed: -0.05,
+  /** Tir dans le jeu — le but lui-même est compté à part, à sa résolution. */
+  shotSaved: 0.05,
+  shotMissed: -0.08,
+  shotOut: -0.05,
+  /** Décisif. */
+  goal: 1,
+  assist: 0.5,
+  /**
+   * Un penalty marqué vaut moins qu'un but construit : le tireur touche déjà
+   * `goal` à la résolution, et l'ancien barème lui ajoutait +0,8 par-dessus,
+   * ce qui payait le penalty (+1,8) mieux qu'une action de jeu (+1,0). En
+   * rater un, en revanche, coûte cher.
+   */
+  penaltyScored: 0.2,
+  penaltyMissed: -0.6,
+  foul: -0.15,
+  yellowCard: -0.3,
+  redCard: -1.5,
+} as const
+
+/**
  * Durée pendant laquelle une possession reste imputable à la phase arrêtée qui
  * l'a lancée. Au-delà, un but compte comme une action construite. La chaîne est
  * aussi rompue par tout changement de camp.
@@ -138,7 +184,7 @@ function newStats() {
     distance: 0,
     runningTicks: 0,
     sprintTicks: 0,
-    rating: 6,
+    rating: RATING.base,
   }
 }
 
@@ -334,7 +380,7 @@ export class MatchEngine {
 
   private bumpRating(id: string, delta: number) {
     const lp = this.state.players[id]
-    lp.stats.rating = clamp(lp.stats.rating + delta, 3, 10)
+    lp.stats.rating = clamp(lp.stats.rating + delta, RATING.min, RATING.max)
   }
 
   // -----------------------------------------------------------------------
@@ -566,7 +612,7 @@ export class MatchEngine {
       const inter = st.players[t.interceptedById]
       this.lastTouchSide = inter.side
       inter.stats.interceptions++
-      this.bumpRating(inter.id, 0.2)
+      this.bumpRating(inter.id, RATING.laneInterception)
       this.log('interception', `Belle lecture ! ${this.nameOf(inter.id)} coupe la passe.`, inter.side, inter.id, inter.x, inter.y)
       this.lastPasserId = null
       // une interception sur dix est un dégagement en catastrophe plutôt qu'une
@@ -641,7 +687,7 @@ export class MatchEngine {
       }
       if (changed) {
         winner.stats.interceptions++
-        this.bumpRating(winner.id, 0.15)
+        this.bumpRating(winner.id, RATING.looseBallRecovery)
         this.log('interception', `Balle perdue ! ${this.nameOf(winner.id)} récupère la balle.`, winner.side, winner.id)
       }
       this.lastPasserId = null
@@ -665,11 +711,11 @@ export class MatchEngine {
       st.score[shootingSide]++
       shooter.stats.goals++
       if (this.isSetPieceGoal(shootingSide)) this.tms(shootingSide).stats.setPieceGoals++
-      this.bumpRating(shooterId, 1)
+      this.bumpRating(shooterId, RATING.goal)
       const assistId = t.assistCandidateId
       if (assistId && !t.fromPenalty && st.players[assistId].side === shootingSide) {
         st.players[assistId].stats.assists++
-        this.bumpRating(assistId, 0.5)
+        this.bumpRating(assistId, RATING.assist)
       }
       this.log(
         'goal',
@@ -751,7 +797,7 @@ export class MatchEngine {
         this.nextDecisionTick = st.tick + 20
         this.log('goal_kick', `Six mètres pour ${defTms.team.short}.`, defSide, undefined, spot.x, spot.y)
       }
-      this.bumpRating(shooterId, -0.05)
+      this.bumpRating(shooterId, RATING.shotOut)
     } else {
       // contré : balle libre au point de frappe
       const winner = this.nearestTo(t.toX, t.toY)
@@ -824,7 +870,7 @@ export class MatchEngine {
     lp.onPitch = false
     lp.sentOff = true
     this.tms(side).stats.redCards++
-    this.bumpRating(playerId, -1.5)
+    this.bumpRating(playerId, RATING.redCard)
     this.sliceTargets.delete(playerId)
     this.presserRanks.delete(playerId)
     if (st.ball.carrierId === playerId) {
@@ -905,7 +951,7 @@ export class MatchEngine {
     shooter.stats.shots++
     attTms.stats.shots++
     if (outcome === 'goal' || outcome === 'save') attTms.stats.shotsOnTarget++
-    this.bumpRating(shooter.id, outcome === 'goal' ? 0.8 : -0.4)
+    this.bumpRating(shooter.id, outcome === 'goal' ? RATING.penaltyScored : RATING.penaltyMissed)
 
     st.ball.carrierId = null
     st.ball.transit = {
@@ -1121,9 +1167,9 @@ export class MatchEngine {
     if (success && !offside && !lineIntercepted) {
       carrier.stats.passesOk++
       this.tms(carrier.side).stats.passesOk++
-      this.bumpRating(carrier.id, 0.02)
+      this.bumpRating(carrier.id, RATING.passOk)
     } else {
-      this.bumpRating(carrier.id, -0.03)
+      this.bumpRating(carrier.id, RATING.passFailed)
     }
 
     const speed = long ? PASS_SPEED.long : PASS_SPEED.short
@@ -1226,7 +1272,10 @@ export class MatchEngine {
     carrier.stats.shots++
     this.tms(carrier.side).stats.shots++
     if (outcome === 'goal' || outcome === 'save') this.tms(carrier.side).stats.shotsOnTarget++
-    this.bumpRating(carrier.id, outcome === 'goal' ? 0 : 0.1)
+    this.bumpRating(
+      carrier.id,
+      outcome === 'goal' ? 0 : outcome === 'save' ? RATING.shotSaved : RATING.shotMissed,
+    )
     this.lastTouchSide = carrier.side
 
     const tx =
@@ -1292,7 +1341,7 @@ export class MatchEngine {
     if (this.rng.chance(foulProb)) {
       oppTms.stats.fouls++
       first.stats.fouls++
-      this.bumpRating(first.id, -0.15)
+      this.bumpRating(first.id, RATING.foul)
       this.log('foul', `Faute de ${this.nameOf(first.id)} sur ${this.nameOf(carrier.id)}.`, oppSide, first.id, carrier.x, carrier.y)
 
       // faute dans la surface de réparation → penalty ?
@@ -1311,7 +1360,7 @@ export class MatchEngine {
         }
         first.yellowCards++
         oppTms.stats.yellowCards++
-        this.bumpRating(first.id, -0.3)
+        this.bumpRating(first.id, RATING.yellowCard)
         this.log('yellow_card', `🟨 Carton jaune pour ${this.nameOf(first.id)}.`, oppSide, first.id)
         if (first.yellowCards >= 2) {
           this.sendOff(oppSide, first.id, 'second_yellow')
@@ -1331,8 +1380,8 @@ export class MatchEngine {
 
     // tacle gagnant
     first.stats.tackles++
-    this.bumpRating(first.id, 0.2)
-    this.bumpRating(carrier.id, -0.05)
+    this.bumpRating(first.id, RATING.tackleWon)
+    this.bumpRating(carrier.id, RATING.dispossessed)
     this.log('tackle', `Beau tacle de ${this.nameOf(first.id)} !`, oppSide, first.id)
     this.lastPasserId = null
 
