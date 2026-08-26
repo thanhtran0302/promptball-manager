@@ -202,6 +202,26 @@ const DUEL_RATE = 1.7
  */
 const SET_PIECE_DANGER_TX = 0.66
 
+/**
+ * Résolution du tir : base au niveau d'ancrage (50 = joueur moyen) et pente
+ * qui traduit l'écart de niveau.
+ *
+ * Les pentes étaient trop raides, et le défaut était invisible au bench : les
+ * deux équipes fictives qui lui servent de référence tournent à 68 de
+ * technique et 67 de décisions, quand la Ligue 3 réelle est à 51 et 57. Le
+ * moteur n'était donc calibré que pour des joueurs très au-dessus de la
+ * moyenne — sur de vrais clubs il tombait à 1,5 but par match, contre ~2,5
+ * dans la vraie Ligue 3.
+ *
+ * L'écart réel entre une élite et une D3 est mince (2,8 buts contre 2,5) ; le
+ * moteur en faisait un gouffre (2,7 contre 1,5). C'est la pente qui est en
+ * cause, pas la base.
+ */
+const SHOT_ON_TARGET_BASE = 0.565
+const SHOT_ON_TARGET_SLOPE = 0.28
+const SHOT_CONV_BASE = 0.211
+const SHOT_CONV_SPREAD = 300
+
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
 
@@ -1360,7 +1380,7 @@ export class MatchEngine {
     // résolution en deux étapes (modèle type OFM) :
     // 1) la frappe est-elle cadrée ? 2) cadrée, entre-t-elle ?
     const mental = (p.attributes.shooting + p.attributes.composure + p.attributes.decisions) / 3
-    let onTarget = clamp(0.522 + ((mental - 50) / 99) * 0.55, 0.15, 0.85)
+    let onTarget = clamp(SHOT_ON_TARGET_BASE + ((mental - 50) / 99) * SHOT_ON_TARGET_SLOPE, 0.15, 0.85)
     onTarget *= clamp(1.05 - d / 35, 0.35, 1) * angleF // loin et/ou angle fermé : plus dur
     onTarget = clamp(onTarget, 0.08, 0.8)
 
@@ -1370,7 +1390,7 @@ export class MatchEngine {
     if (blocker) {
       outcome = 'blocked'
     } else if (this.rng.chance(onTarget)) {
-      let conv = 0.19 + (p.attributes.shooting - gkAttr) / 150
+      let conv = SHOT_CONV_BASE + (p.attributes.shooting - gkAttr) / SHOT_CONV_SPREAD
       if (d < 11) conv *= 1.25 // très proche du but
       conv = clamp(conv, 0.08, 0.55)
       if (this.rng.chance(conv)) outcome = 'goal'
