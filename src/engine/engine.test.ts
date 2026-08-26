@@ -971,6 +971,82 @@ describe('prolongation', () => {
     expect(engine.state.phase).toBe('finished')
     expect(engine.state.tick).toBeLessThan(HALF_TICKS * 2 + 2000)
   })
+
+  /**
+   * Amène un match d'élimination directe jusqu'à la coupure d'avant-prolongation,
+   * en repartant du seed de nul déjà trouvé par findSeeds() plutôt que d'en
+   * chercher un nouveau : assignSlots ne dépend pas du seed, deepHome et home
+   * composent donc le même onze de départ, et le seed reste valide.
+   */
+  function atExtraTimeBreak(): MatchEngine {
+    const { drawSeed } = findSeeds()
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: drawSeed,
+      knockout: true,
+    })
+    let guard = 0
+    while (engine.state.phase !== 'finished' && engine.state.phase !== 'break_before_extra' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    if (engine.state.phase !== 'break_before_extra') {
+      throw new Error("le seed de nul mémoïsé n'atteint pas la coupure d'avant-prolongation avec deepHome")
+    }
+    return engine
+  }
+
+  it('accorde un 6e changement et une 4e fenêtre en prolongation', () => {
+    const engine = atExtraTimeBreak()
+    const bench = benchIds(engine)
+    // il faut 7 remplaçants de champ (5 + le 6e + celui refusé) : deepHome
+    // en fournit 8, contre 4 seulement pour l'effectif standard.
+    expect(bench.length).toBeGreaterThanOrEqual(7)
+    const onPitch = () => engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch)
+
+    // épuiser 5 joueurs et 3 fenêtres pendant le temps réglementaire est déjà
+    // couvert ailleurs : ici on part de la coupure et on vérifie les plafonds
+    expect(engine.state.phase).toBe('break_before_extra')
+    // la coupure est gratuite : cinq changements possibles sans fenêtre
+    let used = 0
+    for (let i = 0; i < 5 && used < 5; i++) {
+      const out = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+      if (engine.makeSub('home', out, bench[used]).ok) used++
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+    expect(engine.state.home.subWindows).toBe(0)
+
+    // le 6e passe : la prolongation en accorde un de plus
+    const out6 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    expect(engine.makeSub('home', out6, bench[5]).ok).toBe(true)
+    expect(engine.state.home.subsUsed).toBe(6)
+
+    // le 7e est refusé
+    const out7 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    const r = engine.makeSub('home', out7, bench[6])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/6\/6/)
+  })
+
+  it('refuse le 6e changement pendant le temps réglementaire', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    let n = 0
+    for (const perWindow of [2, 2, 1]) {
+      engine.runTicks(1)
+      for (let k = 0; k < perWindow; k++, n++) {
+        expect(engine.makeSub('home', lineup[n + 1], bench[n]).ok).toBe(true)
+      }
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+    const r = engine.makeSub('home', lineup[7], bench[5])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/5\/5/)
+  })
 })
 
 describe('sorties de balle', () => {

@@ -2255,24 +2255,40 @@ export class MatchEngine {
     return !isBreak(this.state.phase) && tms.lastSubTick !== this.state.tick
   }
 
+  /**
+   * Plafonds réglementaires. L'IFAB accorde en prolongation un remplacement
+   * supplémentaire — que les cinq soient épuisés ou non — et une fenêtre de
+   * plus. isExtraTime couvre la coupure d'avant-prolongation, où le droit est
+   * déjà ouvert.
+   */
+  private maxSubs(): number {
+    return isExtraTime(this.state.phase) ? MAX_SUBS + 1 : MAX_SUBS
+  }
+
+  private maxSubWindows(): number {
+    return isExtraTime(this.state.phase) ? MAX_SUB_WINDOWS + 1 : MAX_SUB_WINDOWS
+  }
+
   /** Vrai si un remplacement de plus est réglementairement possible. */
   canSub(side: Side): boolean {
     const tms = this.tms(side)
     if (this.state.phase === 'finished') return false
-    if (tms.subsUsed >= MAX_SUBS) return false
-    return !this.opensSubWindow(tms) || tms.subWindows < MAX_SUB_WINDOWS
+    if (tms.subsUsed >= this.maxSubs()) return false
+    return !this.opensSubWindow(tms) || tms.subWindows < this.maxSubWindows()
   }
 
   makeSub(side: Side, outId: string, inId: string): { ok: boolean; error?: string } {
     const st = this.state
     const tms = this.tms(side)
     const newWindow = this.opensSubWindow(tms)
-    if (tms.subsUsed >= MAX_SUBS)
-      return { ok: false, error: `Plus de remplacements disponibles (${MAX_SUBS}/${MAX_SUBS}).` }
-    if (newWindow && tms.subWindows >= MAX_SUB_WINDOWS)
+    const maxSubs = this.maxSubs()
+    const maxWindows = this.maxSubWindows()
+    if (tms.subsUsed >= maxSubs)
+      return { ok: false, error: `Plus de remplacements disponibles (${maxSubs}/${maxSubs}).` }
+    if (newWindow && tms.subWindows >= maxWindows)
       return {
         ok: false,
-        error: `Plus de fenêtre de remplacement disponible (${MAX_SUB_WINDOWS}/${MAX_SUB_WINDOWS}) — attendez la mi-temps.`,
+        error: `Plus de fenêtre de remplacement disponible (${maxWindows}/${maxWindows}) — attendez la mi-temps.`,
       }
     const out = st.players[outId]
     const inc = st.players[inId]
