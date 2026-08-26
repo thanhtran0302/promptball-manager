@@ -26,10 +26,12 @@ import {
   type DefenseSliceInput,
 } from './slices'
 import {
+  EXTRA_HALF_TICKS,
   HALF_TICKS,
   PITCH,
   TICK_SEC,
   isBreak,
+  isExtraTime,
   type AttBehavior,
   type BallTransit,
   type Formation,
@@ -304,6 +306,12 @@ export interface MatchOptions {
    * sinon la calibration mesure une fatigue de fin de match irréaliste.
    */
   autoSubSides?: Side[]
+  /**
+   * Match à élimination directe : une égalité à la fin du temps réglementaire
+   * envoie en prolongation. Faux par défaut, et faux au sim-bench — sinon les
+   * bornes du Pilier A se mesureraient sur des matchs de 120 minutes.
+   */
+  knockout?: boolean
 }
 
 export class MatchEngine {
@@ -351,10 +359,12 @@ export class MatchEngine {
   private readonly autoSubSides: Side[]
   /** Rendez-vous de remplacement déjà consommés (`away:m60`…) */
   private autoSubDone = new Set<string>()
+  private readonly knockout: boolean
 
   constructor(opts: MatchOptions) {
     this.rng = new Rng(opts.seed)
     this.autoSubSides = opts.autoSubSides ?? []
+    this.knockout = opts.knockout ?? false
     const homeTms = this.buildTeamState('home', opts.home, opts.homeInstructions)
     const awayTms = this.buildTeamState('away', opts.away, opts.awayInstructions)
 
@@ -2105,15 +2115,32 @@ export class MatchEngine {
     const st = this.state
     st.ball.carrierId = null
     st.ball.transit = null
+
     if (st.phase === 'first_half') {
       st.phase = 'halftime'
-      this.log(
-        'halftime',
-        `Mi-temps : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
-      )
+      this.log('halftime', `Mi-temps : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`)
       this.runAutoSubs()
       return
     }
+
+    if (st.phase === 'second_half') {
+      if (this.knockout && st.score.home === st.score.away) {
+        st.phase = 'break_before_extra'
+        this.log('halftime', `Fin du temps réglementaire, ${st.score.home} - ${st.score.away} : on joue la prolongation.`)
+        this.runAutoSubs()
+        return
+      }
+      this.fulltime()
+      return
+    }
+
+    if (st.phase === 'extra_first_half') {
+      st.phase = 'extra_halftime'
+      this.log('halftime', `Mi-temps de la prolongation : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`)
+      this.runAutoSubs()
+      return
+    }
+
     this.fulltime()
   }
 
@@ -2129,17 +2156,32 @@ export class MatchEngine {
       st.phase = 'second_half'
       st.periodEndTick = HALF_TICKS * 2 + Math.round(st.addedTimeSec / TICK_SEC)
       this.resetPositions('away')
+      return
     }
+    if (st.phase === 'break_before_extra') {
+      st.phase = 'extra_first_half'
+      st.periodEndTick += EXTRA_HALF_TICKS
+      this.resetPositions('home')
+      return
+    }
+    // extra_halftime
+    st.phase = 'extra_second_half'
+    st.periodEndTick += EXTRA_HALF_TICKS
+    this.resetPositions('away')
   }
 
   private fulltime() {
     const st = this.state
+    const wasExtra = isExtraTime(st.phase)
     st.phase = 'finished'
     st.ball.carrierId = null
     st.ball.transit = null
     this.log(
       'fulltime',
-      `Coup de sifflet final ! ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
+      wasExtra && st.score.home === st.score.away
+        ? // pas de séance de tirs au but dans le moteur : on le dit plutôt que de le masquer
+          `Fin de la prolongation : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}, toujours dos à dos.`
+        : `Coup de sifflet final ! ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
     )
   }
 

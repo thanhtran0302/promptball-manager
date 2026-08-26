@@ -4,7 +4,7 @@ import { defaultInstructions, validateInstructions } from './instructions'
 import { attackTarget, type AttackSliceInput } from './slices'
 import { TEAMS } from '../data/teams'
 import { FORMATION_SLOTS } from './formations'
-import { HALF_TICKS, TICK_SEC, isBreak, isExtraTime, type Player, type Team } from './types'
+import { EXTRA_HALF_TICKS, HALF_TICKS, TICK_SEC, isBreak, isExtraTime, type Player, type Team } from './types'
 
 const [home, away] = TEAMS
 
@@ -876,6 +876,100 @@ describe('MatchEngine', () => {
 
     const timed = attackTarget('run_in_behind', { ...inp, runGamble: false }, 0.7, 0.5)
     expect(timed.tx).toBeLessThan(line)
+  })
+})
+
+describe('prolongation', () => {
+  /** Joue jusqu'à la fin en franchissant chaque pause. */
+  function playOut(engine: MatchEngine) {
+    let guard = 0
+    while (engine.state.phase !== 'finished' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (isBreak(engine.state.phase)) engine.startNextPeriod()
+    }
+    return engine
+  }
+
+  /**
+   * Cherche, sur 12 seeds au plus, un nul et une victoire à 90' (sans
+   * prolongation). Mémoïsé : les deux tests qui en ont besoin partagent la
+   * recherche au lieu de rejouer chacun jusqu'à 60 matchs complets — un nul
+   * arrive environ une fois sur quatre, 12 seeds suffisent très largement.
+   */
+  let seeds: { drawSeed: number; winSeed: number } | null = null
+  function findSeeds() {
+    if (seeds) return seeds
+    let drawSeed = -1
+    let winSeed = -1
+    for (let s = 1; s <= 12 && (drawSeed < 0 || winSeed < 0); s++) {
+      const probe = playOut(
+        new MatchEngine({
+          home,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: s,
+        }),
+      )
+      if (probe.state.score.home === probe.state.score.away) {
+        if (drawSeed < 0) drawSeed = s
+      } else if (winSeed < 0) {
+        winSeed = s
+      }
+    }
+    if (drawSeed < 0) throw new Error("aucun nul à 90' trouvé parmi les 12 premiers seeds")
+    if (winSeed < 0) throw new Error("aucune victoire à 90' trouvée parmi les 12 premiers seeds")
+    seeds = { drawSeed, winSeed }
+    return seeds
+  }
+
+  it('ne joue pas de prolongation en match de championnat', () => {
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: 5,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    expect(engine.state.tick).toBeLessThan(HALF_TICKS * 2 + 2000)
+  })
+
+  it('joue la prolongation en élimination directe si le score est nul à 90', () => {
+    const { drawSeed } = findSeeds()
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: drawSeed,
+        knockout: true,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    // 120 minutes jouées : la prolongation a bien eu lieu
+    expect(engine.state.tick).toBeGreaterThan(HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2 - 10)
+    const types = engine.state.events.map((e) => e.type)
+    expect(types.filter((t) => t === 'halftime').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('ne joue pas de prolongation en élimination directe si un camp mène à 90', () => {
+    const { winSeed } = findSeeds()
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: winSeed,
+        knockout: true,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    expect(engine.state.tick).toBeLessThan(HALF_TICKS * 2 + 2000)
   })
 })
 
