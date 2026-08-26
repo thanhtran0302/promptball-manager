@@ -396,10 +396,14 @@ describe('MatchEngine', () => {
     }
     const perTeamPerMatch = offsides / seeds.length / 2
 
-    // borne basse : la règle doit produire des décisions, pas rester décorative
-    expect(perTeamPerMatch).toBeGreaterThan(0.15)
+    // Bornes calées sur le réel (~2 hors-jeu par équipe et par match) plutôt
+    // que sur ce que le moteur produisait. L'ancienne fenêtre 0,15-1,6 était
+    // écrite quand la tolérance d'arbitrage valait 3,15 m et laissait passer
+    // 0,25 hors-jeu par équipe : elle certifiait que la règle n'était pas
+    // morte, pas qu'elle était juste.
+    expect(perTeamPerMatch).toBeGreaterThan(1)
     // borne haute : un piège du hors-jeu permanent casserait le jeu
-    expect(perTeamPerMatch).toBeLessThan(1.6)
+    expect(perTeamPerMatch).toBeLessThan(3.2)
   })
 
   it("un appel mal minuté franchit la ligne, un appel bien minuté reste en deçà", () => {
