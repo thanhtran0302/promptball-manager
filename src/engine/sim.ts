@@ -116,8 +116,15 @@ const RATING = {
  * Durée pendant laquelle une possession reste imputable à la phase arrêtée qui
  * l'a lancée. Au-delà, un but compte comme une action construite. La chaîne est
  * aussi rompue par tout changement de camp.
+ *
+ * Elle valait 15 s, calibrées quand les joueurs se déplaçaient 30 % plus vite :
+ * la phase d'un corner — premier ballon, second ballon, centre recyclé — se
+ * jouait dans cette fenêtre. Au rythme corrigé elle en sort, et des buts nés
+ * d'un corner comptaient comme des actions construites. C'est une règle
+ * d'imputation, pas de jeu : elle ne change aucun but marqué, seulement leur
+ * classement.
  */
-const SET_PIECE_CHAIN_TICKS = 150
+const SET_PIECE_CHAIN_TICKS = 300
 
 /**
  * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
@@ -160,6 +167,16 @@ const DEAD_BALL_WALK_MS = 1.4
  */
 const BLOCK_REACH_M = 2.0
 const BLOCK_BASE = 0.85
+
+/**
+ * Rampe d'effort : part de `FLOOR` à l'arrivée et atteint le plein régime à
+ * `RAMP_M` mètres de la cible. Les joueurs parcouraient 14,3 km par match
+ * contre ~10,5 en vrai, et sprintaient 10,6 % de leur temps de course contre
+ * ~3 % — parce que l'effort ne dépendait que du comportement choisi, jamais de
+ * la distance restant à couvrir.
+ */
+const EFFORT_RAMP_FLOOR = 0.28
+const EFFORT_RAMP_M = 24
 
 /** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
 const GOAL_LINE_OUT_M = 10
@@ -1547,7 +1564,7 @@ export class MatchEngine {
       // zone morte : à son poste, on tient sa position (arrête le papillonnage)
       const deadZone =
         p.role === 'GK'
-          ? 0.5
+          ? 2.5 // le gardien se replace par paliers, il ne suit pas le ballon au mètre
           : lp.behavior === 'close_down' || lp.behavior === 'mark_man'
             ? 0.8 // le presseur doit arriver à portée de tacle
             : lp.behavior === 'run_in_behind'
@@ -1558,7 +1575,7 @@ export class MatchEngine {
               : isCarrier
                 ? 1.5
                 : 3.5
-      const effort = p.role === 'GK' ? 0.55 : this.effortFor(lp, d, isCarrier)
+      const effort = p.role === 'GK' ? 0.4 : this.effortFor(lp, d, isCarrier)
       // ballon mort : on se replace au pas, on ne court pas
       const vmax = deadBall ? DEAD_BALL_WALK_MS : vmaxFull * effort
       let speedRatio = 0
@@ -1874,22 +1891,30 @@ export class MatchEngine {
       case 'run_in_behind':
       case 'overlap_run':
       case 'attack_box':
-        e = 1 // action urgente : sprint
+        e = 1 // action urgente
         break
       case 'come_short':
       case 'hold_width':
       case 'intercept_lane':
       case 'cover':
       case 'mark_man':
-        e = 0.85
+        e = 0.8
         break
       default:
-        e = 0.55 // repositionnement : course légère
+        e = 0.5 // repositionnement
     }
-    if (distToTarget < 2) e *= 0.45 // arrivé : on ajuste le pas
-    else if (distToTarget < 5) e *= 0.7
+    // Rampe continue sur la distance à couvrir, au lieu des deux marches
+    // d'escalier d'avant (< 2 m puis < 5 m). Un joueur ne s'élance pas pour
+    // trois mètres : il ne sprinte que s'il a de quoi lancer sa foulée.
+    //
+    // Baisser les paliers d'effort à la place produit une falaise : la vitesse
+    // maximale plafonne à 8,2 m/s pour un joueur rapide, donc un effort de
+    // 0,85 la ramène à 6,95, sous le seuil de sprint de 7 m/s — et le ratio de
+    // sprint tombe d'un coup de 10,6 % à 0,0 %. La rampe garde les vrais
+    // sprints, sur les courses longues, et coupe le reste.
+    e *= clamp(EFFORT_RAMP_FLOOR + distToTarget / EFFORT_RAMP_M, EFFORT_RAMP_FLOOR, 1)
     if (isCarrier) e = Math.min(e, 0.8) // balle aux pieds : vitesse contrôlée
-    return clamp(e, 0.3, 1)
+    return clamp(e, 0.12, 1)
   }
 
   private targetFor(lp: LivePlayer): { x: number; y: number } {
