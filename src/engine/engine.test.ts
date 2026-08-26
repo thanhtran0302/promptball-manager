@@ -634,8 +634,32 @@ describe('MatchEngine', () => {
     const perMatch = goals / seeds.length
     expect(perMatch).toBeGreaterThan(1.6)
     expect(perMatch).toBeLessThan(3.6)
-    // les 0-0 existent, ils ne sont pas la norme
-    expect(nilNil).toBeLessThan(seeds.length / 5)
+    // Les 0-0 existent, ils ne sont pas la norme. Borne large : à 2 buts par
+    // match, Poisson en attend déjà 13 % avec un écart-type de ±1,5 sur vingt
+    // matchs — c'est la moyenne de buts ci-dessus qui porte le test, pas ce
+    // compteur, qui ne sert qu'à repérer un moteur qui ne marque plus du tout.
+    expect(nilNil).toBeLessThan(seeds.length / 3)
+  })
+
+  // Le commentaire de `DUEL_OUT_*` donne 9-11 corners et 35-45 touches pour
+  // cible. Les corners étaient à 12,6 : la ligne de but happait les duels
+  // jusqu'à 10 m, là où la géométrie du terrain (105 m contre 68) en envoie
+  // déjà beaucoup de ce côté. Les bornes ici sont larges à dessein — elles
+  // gardent l'ordre de grandeur, pas le réglage fin, qui se mesure au bench.
+  it('répartit les sorties de balle entre corner et touche (12 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97]
+    let corners = 0
+    let throwIns = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      corners += engine.state.home.stats.corners + engine.state.away.stats.corners
+      throwIns += engine.state.events.filter((e) => e.type === 'throw_in').length
+    }
+    const n = seeds.length
+    expect(corners / n).toBeGreaterThan(6)
+    expect(corners / n).toBeLessThan(13)
+    // la touche reste la sortie la plus fréquente, de loin
+    expect(throwIns / n).toBeGreaterThan(corners / n)
   })
 
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {

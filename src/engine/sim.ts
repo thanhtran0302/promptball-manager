@@ -222,8 +222,14 @@ const SHOT_ON_TARGET_SLOPE = 0.28
 const SHOT_CONV_BASE = 0.211
 const SHOT_CONV_SPREAD = 300
 
-/** Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors. */
-const GOAL_LINE_OUT_M = 10
+/**
+ * Distance à la ligne de but en deçà de laquelle un duel peut l'envoyer dehors
+ * par la ligne de but plutôt que par la touche. Elle valait 10 m et produisait
+ * 12,6 corners par match, au-dessus des 9-11 que le commentaire de
+ * `DUEL_OUT_*` juste au-dessus donne lui-même pour cible. Les sorties
+ * excédentaires repartent en touche, qui en manquait.
+ */
+const GOAL_LINE_OUT_M = 8
 
 /**
  * Durée des arrêts de jeu, EN SECONDES. Ces valeurs étaient auparavant écrites
