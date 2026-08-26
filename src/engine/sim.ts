@@ -88,6 +88,14 @@ const RATING = {
   shotSaved: 0.05,
   shotMissed: -0.08,
   shotOut: -0.05,
+  /**
+   * Gardien. Sans ces deux lignes il ne se passait rien de noté dans sa
+   * surface : `PlayerStats.saves` n'était incrémenté nulle part dans le
+   * moteur, et la note des gardiens restait collée à la base — 6,16 de
+   * moyenne, quel que soit le match joué.
+   */
+  save: 0.18,
+  goalConceded: -0.3,
   /** Décisif. */
   goal: 1,
   assist: 0.5,
@@ -721,6 +729,7 @@ export class MatchEngine {
       shooter.stats.goals++
       if (this.isSetPieceGoal(shootingSide)) this.tms(shootingSide).stats.setPieceGoals++
       this.bumpRating(shooterId, RATING.goal)
+      if (keeper) this.bumpRating(keeper.id, RATING.goalConceded)
       const assistId = t.assistCandidateId
       if (assistId && !t.fromPenalty && st.players[assistId].side === shootingSide) {
         st.players[assistId].stats.assists++
@@ -740,6 +749,8 @@ export class MatchEngine {
     } else if (t.shotOutcome === 'save') {
       // le gardien capte la balle — visible : la balle file vers lui, court temps mort
       if (keeper) {
+        keeper.stats.saves++
+        this.bumpRating(keeper.id, RATING.save)
         st.ball.carrierId = null
         st.ball.transit = {
           fromX: st.ball.x,
