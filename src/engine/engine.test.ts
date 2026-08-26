@@ -361,11 +361,11 @@ describe('MatchEngine', () => {
       }
     }
     const km = metres / count / 1000
-    // la cible du Pilier A est 9-12 km : la borne haute reste large tant que
-    // le chantier « possessions réalistes » n'est pas fait, mais un joueur qui
-    // court pendant les arrêts la repasse aussitôt
-    expect(km).toBeLessThan(16.5)
-    expect(km).toBeGreaterThan(8)
+    // Bornes du Pilier A, désormais tenues (11,6 km sur ces six seeds). La
+    // borne haute était provisoirement à 16,5 tant que le chantier
+    // « possessions réalistes » restait ouvert ; il l'est moins.
+    expect(km).toBeLessThan(12.5)
+    expect(km).toBeGreaterThan(9)
   })
 
   // Régression : `PlayerStats.saves` était déclaré, initialisé à 0, et
@@ -445,6 +445,78 @@ describe('MatchEngine', () => {
     }
     expect(blocks).toBeGreaterThan(0)
     expect(attackKeeps).toBeGreaterThan(0)
+  })
+
+  // Régression : l'effort ne dépendait que du comportement choisi, jamais de
+  // la distance restant à couvrir — un joueur s'élançait à fond pour trois
+  // mètres. 14,3 km par joueur de champ et 10,6 % du temps de course passé
+  // au-dessus de 7 m/s, contre ~10,5 km et ~3 % en vrai.
+  //
+  // Attention au piège : baisser les paliers d'effort au lieu d'ajouter la
+  // rampe fait tomber le ratio de sprint à 0,00 % d'un coup. La vitesse
+  // maximale plafonne à 8,2 m/s, donc un effort de 0,85 la ramène sous le
+  // seuil de 7 m/s et PLUS PERSONNE ne sprinte jamais. Une borne basse est
+  // donc aussi nécessaire que la haute.
+  it('sprinte par bouffées, pas en continu ni jamais (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let running = 0
+    let sprinting = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      for (const tms of [engine.state.home, engine.state.away]) {
+        for (const id of tms.lineup) {
+          if (tms.team.players.find((p) => p.id === id)!.role === 'GK') continue
+          running += engine.state.players[id].stats.runningTicks
+          sprinting += engine.state.players[id].stats.sprintTicks
+        }
+      }
+    }
+    const ratio = sprinting / running
+    expect(ratio).toBeGreaterThan(0.01)
+    expect(ratio).toBeLessThan(0.1)
+  })
+
+  // Le gardien parcourait 9,5 km par match — presque autant qu'un défenseur —
+  // parce que sa zone morte était de 50 cm : il suivait le ballon au mètre au
+  // lieu de se replacer par paliers. Un vrai gardien couvre ~5,5 km.
+  it('ne fait pas courir le gardien comme un milieu (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let metres = 0
+    let count = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      for (const tms of [engine.state.home, engine.state.away]) {
+        const keeperId = tms.lineup.find(
+          (id) => tms.team.players.find((p) => p.id === id)!.role === 'GK',
+        )!
+        metres += engine.state.players[keeperId].stats.distance
+        count++
+      }
+    }
+    expect(metres / count / 1000).toBeLessThan(8)
+  })
+
+  // La fatigue doit rester lisible : le Pilier A vise 65-75 % de fraîcheur en
+  // fin de match sur instructions neutres. Diviser la course par 1,3 sans
+  // retoucher le drain la faisait finir à 80 % — plus personne ne fatiguait,
+  // et remplacer ne servait plus à rien.
+  it('laisse les joueurs fatigués en fin de match (6 matchs)', () => {
+    const seeds = [11, 23, 37, 41, 59, 67]
+    let stamina = 0
+    let count = 0
+    for (const seed of seeds) {
+      const engine = runFullMatch(seed)
+      for (const tms of [engine.state.home, engine.state.away]) {
+        for (const id of tms.lineup) {
+          if (tms.team.players.find((p) => p.id === id)!.role === 'GK') continue
+          stamina += engine.state.players[id].stamina
+          count++
+        }
+      }
+    }
+    const mean = stamina / count
+    expect(mean).toBeGreaterThan(62)
+    expect(mean).toBeLessThan(78)
   })
 
   it('produit un taux de tirs cadrés plausible (moyenne sur 3 matchs)', () => {

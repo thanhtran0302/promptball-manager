@@ -203,11 +203,12 @@ const CRITERIA: Criterion[] = [
  * refermera. Elles s'affichent mais ne font pas échouer le run : le check reste
  * ainsi utilisable comme garde-fou dès aujourd'hui, et retirer une ligne d'ici
  * est ce qui matérialise l'avancement d'un chantier.
+ *
+ * La table est vide : les huit critères du Pilier A tiennent dans leurs bornes.
+ * Toute ligne rajoutée ici est une dette, pas un ajustement — elle doit nommer
+ * le chantier qui la refermera.
  */
-const KNOWN_BREACHES = new Map<string, string>([
-  ['Distance / joueur', 'Pilier A — possessions réalistes (14,2 → 10-12 km)'],
-  ['Buts sur phase arrêtée', 'Pilier A — phases arrêtées jouées'],
-])
+const KNOWN_BREACHES = new Map<string, string>([])
 
 if (CHECK) {
   console.log(`\n=== CHECK Pilier A (${N} matchs, ${MATCHUP}) ===`)
