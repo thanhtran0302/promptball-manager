@@ -194,6 +194,12 @@ export interface LivePlayer {
   sentOff: boolean
   /** déjà remplacé : ne peut plus revenir en jeu */
   subbedOff: boolean
+  /**
+   * 'knock' : reste en jeu, diminué jusqu'à la fin du match — un knock ne
+   * guérit pas. 'out' : a dû quitter le terrain, son poste reste dans lineup.
+   * Un joueur déjà 'knock' peut passer à 'out' ; l'inverse est impossible.
+   */
+  injury: 'none' | 'knock' | 'out'
 }
 
 export interface BallTransit {
@@ -246,6 +252,7 @@ export type MatchEventType =
   | 'offside'
   | 'stamina_low'
   | 'sub'
+  | 'injury'
   | 'halftime'
   | 'fulltime'
   | 'info'

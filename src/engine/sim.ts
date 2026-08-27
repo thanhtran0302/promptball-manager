@@ -139,6 +139,14 @@ export const MAX_SUBS = 5
 export const MAX_SUB_WINDOWS = 3
 
 /**
+ * Effet d'un joueur touché qui reste en jeu : il perd de la vitesse de pointe
+ * et se vide plus vite. Le coach automatique le sortira donc de lui-même au
+ * prochain rendez-vous, sans règle dédiée.
+ */
+const INJURY_SPEED_MUL = 0.85
+const INJURY_ENDURANCE_MUL = 0.8
+
+/**
  * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
  * laisser au vainqueur. C'est la première source de touches d'un vrai match :
  * sans elle, 142 interceptions et 25 tacles par match ne produisaient aucune
@@ -387,6 +395,7 @@ export class MatchEngine {
           yellowCards: 0,
           sentOff: false,
           subbedOff: false,
+          injury: 'none',
         }
       }
     }
@@ -1654,7 +1663,8 @@ export class MatchEngine {
           ? this.sliceTargets.get(lp.id)!
           : this.targetFor(lp)
       const d = dist(lp.x, lp.y, tgt.x, tgt.y)
-      const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina)
+      const knocked = lp.injury === 'knock'
+      const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina) * (knocked ? INJURY_SPEED_MUL : 1)
       const isCarrier = st.ball.carrierId === lp.id
       // zone morte : à son poste, on tient sa position (arrête le papillonnage)
       const deadZone =
@@ -1708,7 +1718,7 @@ export class MatchEngine {
           extraWork,
           intensityElevee: pi?.intensity === 'elevee',
         },
-        p.attributes.stamina,
+        knocked ? p.attributes.stamina * INJURY_ENDURANCE_MUL : p.attributes.stamina,
         p.role === 'GK',
       )
       if (!lp.warned40 && lp.stamina < 40 && before >= 40) {

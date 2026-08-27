@@ -357,6 +357,23 @@ describe('MatchEngine', () => {
     expect(a.state.players['h2'].stamina).toBeLessThan(b.state.players['h2'].stamina)
   })
 
+  it('un joueur touché court moins vite et se vide plus vite', () => {
+    const run = (knock: boolean) => {
+      const engine = subEngine()
+      const id = engine.state.home.lineup[6] // un milieu, pas le gardien
+      if (knock) engine.state.players[id].injury = 'knock'
+      engine.runTicks(9000) // 15 minutes
+      return {
+        distance: engine.state.players[id].stats.distance,
+        stamina: engine.state.players[id].stamina,
+      }
+    }
+    const sain = run(false)
+    const touche = run(true)
+    expect(touche.distance).toBeLessThan(sain.distance)
+    expect(touche.stamina).toBeLessThan(sain.stamina)
+  })
+
   it('respecte la composition titulaire explicite', () => {
     const instr = defaultInstructions()
     instr.team = { ...instr.team, formation: '4-3-3' }
