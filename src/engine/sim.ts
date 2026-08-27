@@ -2,6 +2,7 @@
 // Home attaque vers x=105, away vers x=0.
 
 import { Rng } from './rng'
+import { runAutoSub } from './autoSub'
 import {
   FORMATION_SLOTS,
   assignSlots,
@@ -125,6 +126,14 @@ const RATING = {
  * sifflait 7 fautes par match ; au rythme et au volume corrigés, 20 s.
  */
 const SET_PIECE_CHAIN_TICKS = 200
+
+/**
+ * Règlement National (et IFAB moderne) : cinq joueurs remplaçables, en trois
+ * interruptions au maximum. Les changements opérés à la mi-temps ne comptent
+ * dans aucune des trois.
+ */
+export const MAX_SUBS = 5
+export const MAX_SUB_WINDOWS = 3
 
 /**
  * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
@@ -288,6 +297,12 @@ export interface MatchOptions {
   homeInstructions: MatchInstructions
   awayInstructions: MatchInstructions
   seed: number
+  /**
+   * Côtés dont les remplacements sont gérés par le coach automatique.
+   * L'interface n'y met que le camp de l'IA ; le sim-bench y met les deux,
+   * sinon la calibration mesure une fatigue de fin de match irréaliste.
+   */
+  autoSubSides?: Side[]
 }
 
 export class MatchEngine {
@@ -331,8 +346,14 @@ export class MatchEngine {
   /** dernier porteur, pour invalider sa cible hors-ballon */
   private lastCarrierId: string | null = null
 
+  /** Côtés pris en charge par le coach automatique (remplacements). */
+  private readonly autoSubSides: Side[]
+  /** Rendez-vous de remplacement déjà consommés (`away:m60`…) */
+  private autoSubDone = new Set<string>()
+
   constructor(opts: MatchOptions) {
     this.rng = new Rng(opts.seed)
+    this.autoSubSides = opts.autoSubSides ?? []
     const homeTms = this.buildTeamState('home', opts.home, opts.homeInstructions)
     const awayTms = this.buildTeamState('away', opts.away, opts.awayInstructions)
 
@@ -354,6 +375,7 @@ export class MatchEngine {
           behavior: 'hold_position',
           yellowCards: 0,
           sentOff: false,
+          subbedOff: false,
         }
       }
     }
@@ -394,6 +416,8 @@ export class MatchEngine {
       instructions,
       lineup,
       subsUsed: 0,
+      subWindows: 0,
+      lastSubTick: -1,
       stats: {
         shots: 0,
         shotsOnTarget: 0,
@@ -495,6 +519,7 @@ export class MatchEngine {
       this.fulltime()
       return
     }
+    this.runAutoSubs()
 
     // mémoire des positions pour l'interpolation du rendu
     st.ball.prevX = st.ball.x
@@ -2087,6 +2112,13 @@ export class MatchEngine {
       'halftime',
       `Mi-temps : ${st.home.team.short} ${st.score.home} - ${st.score.away} ${st.away.team.short}.`,
     )
+    // tick() sort dès la bascule de phase : le rendez-vous de la mi-temps doit
+    // être déclenché ici, sinon le coach automatique ne le voit jamais
+    this.runAutoSubs()
+  }
+
+  private runAutoSubs() {
+    for (const side of this.autoSubSides) runAutoSub(this, side, this.autoSubDone)
   }
 
   startSecondHalf() {
@@ -2166,20 +2198,48 @@ export class MatchEngine {
     })
   }
 
+  /**
+   * Une fenêtre s'ouvre au premier changement d'une interruption. Les suivants
+   * opérés au même tick (boucle d'applyInstructions, clics enchaînés pendant
+   * une pause tactique) tombent dans la même fenêtre. La mi-temps n'en ouvre
+   * aucune : le règlement l'offre en plus des trois.
+   */
+  private opensSubWindow(tms: TeamMatchState): boolean {
+    return this.state.phase !== 'halftime' && tms.lastSubTick !== this.state.tick
+  }
+
+  /** Vrai si un remplacement de plus est réglementairement possible. */
+  canSub(side: Side): boolean {
+    const tms = this.tms(side)
+    if (this.state.phase === 'finished') return false
+    if (tms.subsUsed >= MAX_SUBS) return false
+    return !this.opensSubWindow(tms) || tms.subWindows < MAX_SUB_WINDOWS
+  }
+
   makeSub(side: Side, outId: string, inId: string): { ok: boolean; error?: string } {
     const st = this.state
     const tms = this.tms(side)
-    if (tms.subsUsed >= 3) return { ok: false, error: 'Plus de remplacements disponibles (3/3).' }
+    const newWindow = this.opensSubWindow(tms)
+    if (tms.subsUsed >= MAX_SUBS)
+      return { ok: false, error: `Plus de remplacements disponibles (${MAX_SUBS}/${MAX_SUBS}).` }
+    if (newWindow && tms.subWindows >= MAX_SUB_WINDOWS)
+      return {
+        ok: false,
+        error: `Plus de fenêtre de remplacement disponible (${MAX_SUB_WINDOWS}/${MAX_SUB_WINDOWS}) — attendez la mi-temps.`,
+      }
     const out = st.players[outId]
     const inc = st.players[inId]
     if (!out || !out.onPitch) return { ok: false, error: `${this.nameOf(outId)} n'est pas sur le terrain.` }
     if (!inc || inc.onPitch) return { ok: false, error: `${this.nameOf(inId)} est déjà sur le terrain.` }
+    if (inc.subbedOff) return { ok: false, error: `${this.nameOf(inId)} a déjà été remplacé.` }
+    if (inc.sentOff) return { ok: false, error: `${this.nameOf(inId)} a été exclu.` }
     if (this.player(inId).role === 'GK' && this.player(outId).role !== 'GK')
       return { ok: false, error: 'Un gardien ne peut remplacer qu’un gardien (MVP).' }
 
     const idx = tms.lineup.indexOf(outId)
     tms.lineup[idx] = inId
     out.onPitch = false
+    out.subbedOff = true
     inc.onPitch = true
     inc.stamina = 100
     inc.warned40 = false
@@ -2190,6 +2250,10 @@ export class MatchEngine {
     inc.prevY = inc.y
     if (st.ball.carrierId === outId) st.ball.carrierId = inId
     tms.subsUsed++
+    if (newWindow) tms.subWindows++
+    // la mi-temps ne mémorise pas son tick : sinon la reprise hériterait d'une
+    // fenêtre déjà ouverte et le premier changement du retour serait gratuit
+    if (st.phase !== 'halftime') tms.lastSubTick = st.tick
     this.log('sub', `🔁 Remplacement ${tms.team.short} : ${this.nameOf(inId)} entre à la place de ${this.nameOf(outId)}.`, side, inId)
     return { ok: true }
   }

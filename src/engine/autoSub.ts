@@ -1,0 +1,88 @@
+// Coach automatique : remplacements d'un côté non piloté par un humain.
+//
+// Sans lui, l'IA ne remplaçait jamais personne — zéro changement sur vingt
+// matchs de sim-bench — et finissait à ~60 de fraîcheur pendant que le joueur
+// humain faisait tourner. Le déséquilibre fausse autant le match que la
+// calibration : distance parcourue et taux de sprint sont des métriques
+// contraintes du bench.
+
+import type { MatchEngine } from './sim'
+import { TICK_SEC, type Side } from './types'
+
+/**
+ * Usure minimale, en points de fraîcheur perdus, pour qu'une sortie vaille le
+ * coup. Séparer ce seuil de la sélection est le point clé : la sélection est un
+ * rang (les plus émoussés du onze), le déclenchement une usure absolue. Un seuil
+ * exprimé en écart avec le plus frais dépendrait de la dispersion de l'effectif
+ * — mesuré, 5,2 points chez une équipe technique contre 3,3 chez une équipe
+ * homogène, qui ne remplacerait alors jamais personne.
+ * Repères mesurés : ~14 points perdus à la mi-temps, ~21 à la 60e, ~26 à la 75e.
+ */
+const WORN_DROP = 18
+/**
+ * Mi-temps : exigence volontairement plus dure. À 25, le rendez-vous ne mord
+ * qu'après une première période réellement coûteuse (pressing haut, intensité
+ * élevée), et reste sans effet dans un match ordinaire.
+ */
+const HALFTIME_WORN_DROP = 25
+/** Changements par fenêtre : au-delà, un coach désorganise plus qu'il ne soulage. */
+const MAX_PER_WINDOW = 2
+/** Minutes où le coach ouvre une fenêtre. La mi-temps s'y ajoute, gratuitement. */
+const TRIGGER_MINUTES = [60, 75]
+
+/**
+ * Déclenche au plus une fenêtre par point de rendez-vous. `done` porte les
+ * déclencheurs déjà consommés (`home:ht`, `away:m60`…) et vit dans le moteur :
+ * la fonction est appelée à chaque tick et doit être sans effet le reste du temps.
+ */
+export function runAutoSub(engine: MatchEngine, side: Side, done: Set<string>): void {
+  const st = engine.state
+
+  let trigger: string | null = null
+  if (st.phase === 'halftime') trigger = 'ht'
+  else if (st.phase === 'first_half' || st.phase === 'second_half') {
+    const minute = Math.floor((st.tick * TICK_SEC) / 60)
+    for (const m of TRIGGER_MINUTES) if (minute >= m) trigger = `m${m}`
+  }
+  if (!trigger) return
+
+  const key = `${side}:${trigger}`
+  if (done.has(key)) return
+  done.add(key)
+
+  if (!engine.canSub(side)) return
+
+  const tms = st[side]
+  const byId = new Map(tms.team.players.map((p) => [p.id, p]))
+
+  // ponytail: le banc est pris dans l'ordre de l'effectif, qui est déjà trié par
+  // niveau dans les données. Un vrai choix (note × fraîcheur × poste) demanderait
+  // un modèle d'évaluation ; à ajouter si le bench montre des entrées absurdes.
+  const pool = tms.team.players.filter((p) => {
+    const lp = st.players[p.id]
+    return lp && !lp.onPitch && !lp.sentOff && !lp.subbedOff && p.role !== 'GK'
+  })
+  if (pool.length === 0) return
+
+  const drop = trigger === 'ht' ? HALFTIME_WORN_DROP : WORN_DROP
+  const tired = tms.lineup
+    .filter((id) => {
+      const lp = st.players[id]
+      return lp?.onPitch && byId.get(id)?.role !== 'GK' && lp.stamina <= 100 - drop
+    })
+    .sort((a, b) => st.players[a].stamina - st.players[b].stamina)
+
+  let made = 0
+  for (const outId of tired) {
+    if (made >= MAX_PER_WINDOW || !engine.canSub(side)) break
+    const outRole = byId.get(outId)!.role
+    // doublure au poste si elle existe, sinon le meilleur restant : laisser un
+    // joueur cuit sur le terrain coûte plus cher qu'un poste approximatif
+    const at = pool.findIndex((p) => p.role === outRole)
+    const idx = at >= 0 ? at : 0
+    if (!engine.makeSub(side, outId, pool[idx].id).ok) break
+    pool.splice(idx, 1)
+    made++
+    if (pool.length === 0) break
+  }
+}

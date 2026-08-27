@@ -192,6 +192,8 @@ export interface LivePlayer {
   yellowCards: number
   /** exclu (rouge) : reste dans la compo pour garder les postes, mais plus sur le terrain */
   sentOff: boolean
+  /** déjà remplacé : ne peut plus revenir en jeu */
+  subbedOff: boolean
 }
 
 export interface BallTransit {
@@ -282,7 +284,16 @@ export interface TeamMatchState {
   instructions: MatchInstructions
   /** 11 ids sur le terrain, index = slot de formation */
   lineup: string[]
+  /** Joueurs déjà remplacés (plafond MAX_SUBS) */
   subsUsed: number
+  /**
+   * Fenêtres de remplacement consommées (plafond MAX_SUB_WINDOWS). Une fenêtre
+   * = une interruption de jeu, quel que soit le nombre de changements opérés
+   * pendant celle-ci. Les changements de la mi-temps n'en consomment aucune.
+   */
+  subWindows: number
+  /** Tick du dernier changement hors mi-temps ; -1 = aucun. Sert au groupement. */
+  lastSubTick: number
   stats: TeamMatchStats
 }
 
