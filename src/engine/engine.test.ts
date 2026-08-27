@@ -1025,6 +1025,41 @@ describe('prolongation', () => {
   })
 
   /**
+   * Régression : le coach automatique n'avait aucun rendez-vous après la 90e.
+   * `trigger` valait la même constante pour les trois pauses — la mi-temps
+   * consommait la clé des deux coupures de la prolongation — et les phases de
+   * prolongation ne tombaient dans aucune branche à la minute. Mesuré alors :
+   * 480 remplacements automatiques sur 60 matchs, zéro après la 90e.
+   */
+  it('fait encore entrer des remplaçants après la 90e minute en prolongation', () => {
+    let extraTimeMatches = 0
+    let lateSubs = 0
+    for (let s = 1; s <= 10 && extraTimeMatches < 2; s++) {
+      const engine = playOut(
+        new MatchEngine({
+          // deepHome : le banc standard (4 joueurs de champ) est déjà vidé à la
+          // 75e par le coach, il ne resterait personne à faire entrer après 90'
+          home: deepHome,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: s,
+          knockout: true,
+          autoSubSides: ['home', 'away'],
+        }),
+      )
+      if (engine.state.tick < HALF_TICKS * 2 + EXTRA_HALF_TICKS) continue
+      extraTimeMatches++
+      // l'horloge de la prolongation s'arrête pile à 120:00 : le temps
+      // additionnel appartient au temps réglementaire, il ne s'hérite pas
+      expect(engine.state.tick).toBe(HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2)
+      lateSubs += engine.state.events.filter((e) => e.type === 'sub' && e.tick >= HALF_TICKS * 2).length
+    }
+    expect(extraTimeMatches).toBeGreaterThanOrEqual(2)
+    expect(lateSubs).toBeGreaterThanOrEqual(1)
+  })
+
+  /**
    * Amène un match d'élimination directe jusqu'à la coupure d'avant-prolongation,
    * en repartant du seed de nul déjà trouvé par findSeeds() plutôt que d'en
    * chercher un nouveau : assignSlots ne dépend pas du seed, deepHome et home
@@ -1174,10 +1209,12 @@ describe('prolongation', () => {
     expect(r.error).toMatch(/5\/5/)
   })
 
-  it('produit un taux de blessures réaliste (20 matchs)', () => {
+  // 60 matchs et non 20 : à 20, le plancher de 0,25 sortie/match tenait à six
+  // sorties observées — une de moins et le test bascule. Bornes inchangées.
+  it('produit un taux de blessures réaliste (60 matchs)', () => {
     let out = 0
     let knocks = 0
-    for (let s = 0; s < 20; s++) {
+    for (let s = 0; s < 60; s++) {
       const engine = playOut(
         new MatchEngine({
           home,
@@ -1193,10 +1230,10 @@ describe('prolongation', () => {
       }
     }
     // cibles UEFA (~8 blessures / 1000 h de match) : 0,25-0,45 sortie/match
-    expect(out / 20).toBeGreaterThanOrEqual(0.25)
-    expect(out / 20).toBeLessThanOrEqual(0.45)
-    expect(knocks / 20).toBeGreaterThanOrEqual(0.8)
-    expect(knocks / 20).toBeLessThanOrEqual(1.6)
+    expect(out / 60).toBeGreaterThanOrEqual(0.25)
+    expect(out / 60).toBeLessThanOrEqual(0.45)
+    expect(knocks / 60).toBeGreaterThanOrEqual(0.8)
+    expect(knocks / 60).toBeLessThanOrEqual(1.6)
   })
 
   // Régression : un coup franc réattribuait le ballon au fauté même quand une

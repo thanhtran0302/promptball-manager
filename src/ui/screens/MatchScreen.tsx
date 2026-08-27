@@ -77,7 +77,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
       : `${minute}'`
 
   const breakLabel =
-    st.phase === 'halftime' ? 'MT' : st.phase === 'break_before_extra' ? 'Fin 90’' : 'MT prol.'
+    st.phase === 'halftime' ? 'MT' : st.phase === 'break_before_extra' ? "Fin 90'" : 'MT prol.'
   const resumeLabel =
     st.phase === 'halftime'
       ? '▶ Coup d’envoi de la seconde période'
@@ -263,7 +263,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
               </span>
             </h4>
             {halftime && !finished && (
-              <p className="muted small">Mi-temps : les changements ne consomment pas de fenêtre.</p>
+              <p className="muted small">{breakLabel} : les changements ne consomment pas de fenêtre.</p>
             )}
             {subError && <p className="errors">✗ {subError}</p>}
             <ul className="stamina-list">
@@ -286,10 +286,12 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
                         🔁
                       </button>
                     )}
-                    {subFor === id && (
+                    {canSub && subFor === id && (
                       <div className="sub-menu">
                         {bench
-                          .filter((b) => (p.role === 'GK' ? b.role === 'GK' : true))
+                          // règle du moteur, verbatim : un gardien ne remplace
+                          // qu'un gardien (l'inverse reste permis, faute de mieux)
+                          .filter((b) => b.role !== 'GK' || p.role === 'GK')
                           .map((b) => (
                             <button key={b.id} onClick={() => doSub(id, b.id)}>
                               {b.position} {b.name} <span className="muted">({Math.round(st.players[b.id].stamina)}%)</span>

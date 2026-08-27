@@ -135,8 +135,8 @@ const SET_PIECE_CHAIN_TICKS = 200
  * interruptions au maximum. Les changements opérés à la mi-temps ne comptent
  * dans aucune des trois.
  */
-export const MAX_SUBS = 5
-export const MAX_SUB_WINDOWS = 3
+const MAX_SUBS = 5
+const MAX_SUB_WINDOWS = 3
 
 /**
  * Effet d'un joueur touché qui reste en jeu : il perd de la vitesse de pointe
@@ -1019,7 +1019,7 @@ export class MatchEngine {
     for (const id of tms.lineup) {
       if (this.player(id).role === 'GK' && this.state.players[id].onPitch) return this.state.players[id]
     }
-    // gardien exclu : le joueur de champ le plus à même d'aller au but
+    // gardien absent (exclu ou blessé) : le joueur de champ le plus à même d'aller au but
     let best: LivePlayer | null = null
     let bestAttr = -1
     for (const lp of Object.values(this.state.players)) {
@@ -1033,14 +1033,15 @@ export class MatchEngine {
     return best
   }
 
-  /** Exclusion : le joueur quitte le terrain, son équipe finit en infériorité. */
-  private sendOff(side: Side, playerId: string, reason: 'second_yellow' | 'direct') {
+  /**
+   * Sortie définitive du terrain (exclusion, blessure). Les cibles de slice et
+   * le rang de presseur du joueur sont périmés, et le ballon qu'il portait
+   * revient au plus proche — sans quoi un fantôme hors terrain continue de le
+   * porter. Point unique : les deux appelants divergeaient mot pour mot.
+   */
+  private leavePitch(playerId: string) {
     const st = this.state
-    const lp = st.players[playerId]
-    lp.onPitch = false
-    lp.sentOff = true
-    this.tms(side).stats.redCards++
-    this.bumpRating(playerId, RATING.redCard)
+    st.players[playerId].onPitch = false
     this.sliceTargets.delete(playerId)
     this.presserRanks.delete(playerId)
     if (st.ball.carrierId === playerId) {
@@ -1051,6 +1052,16 @@ export class MatchEngine {
         st.possession = winner.side
       }
     }
+  }
+
+  /** Exclusion : le joueur quitte le terrain, son équipe finit en infériorité. */
+  private sendOff(side: Side, playerId: string, reason: 'second_yellow' | 'direct') {
+    const st = this.state
+    const lp = st.players[playerId]
+    lp.sentOff = true
+    this.leavePitch(playerId)
+    this.tms(side).stats.redCards++
+    this.bumpRating(playerId, RATING.redCard)
     const teamName = this.tms(side).team.short
     this.log(
       'red_card',
@@ -1082,17 +1093,7 @@ export class MatchEngine {
     }
 
     lp.injury = 'out'
-    lp.onPitch = false
-    this.sliceTargets.delete(playerId)
-    this.presserRanks.delete(playerId)
-    if (st.ball.carrierId === playerId) {
-      st.ball.carrierId = null
-      const winner = this.nearestTo(st.ball.x, st.ball.y)
-      if (winner) {
-        st.ball.carrierId = winner.id
-        st.possession = winner.side
-      }
-    }
+    this.leavePitch(playerId)
     this.log('injury', `🚑 ${this.nameOf(playerId)} ne peut pas continuer, il quitte le terrain.`, side, playerId)
     this.forcedSub(side, playerId)
   }
@@ -1796,6 +1797,11 @@ export class MatchEngine {
         }
       }
 
+      // une lésion musculaire vient peut-être de le sortir : plus de fatigue à
+      // mettre à jour, et surtout plus de « jambes lourdes » juste après
+      // « il ne peut pas continuer »
+      if (!lp.onPitch) continue
+
       const tms = this.tms(lp.side)
       const ti = tms.instructions.team
       const pi = this.instrFor(tms, lp.id)
@@ -2266,13 +2272,16 @@ export class MatchEngine {
     }
     if (st.phase === 'break_before_extra') {
       st.phase = 'extra_first_half'
-      st.periodEndTick += EXTRA_HALF_TICKS
+      // affectation absolue : un `+=` hériterait du temps additionnel de la
+      // seconde mi-temps et l'horloge finirait à 121', 122'… Le temps
+      // additionnel reste ce qu'il est, un arrêt de jeu du temps réglementaire.
+      st.periodEndTick = HALF_TICKS * 2 + EXTRA_HALF_TICKS
       this.resetPositions('home')
       return
     }
     // extra_halftime
     st.phase = 'extra_second_half'
-    st.periodEndTick += EXTRA_HALF_TICKS
+    st.periodEndTick = HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2
     this.resetPositions('away')
   }
 
@@ -2385,6 +2394,9 @@ export class MatchEngine {
 
   makeSub(side: Side, outId: string, inId: string): { ok: boolean; error?: string } {
     const st = this.state
+    // canSub le refuse déjà : sans la garde ici, un menu resté ouvert au coup
+    // de sifflet final muterait encore lineup, subsUsed et les notes du match
+    if (st.phase === 'finished') return { ok: false, error: 'Le match est terminé.' }
     const tms = this.tms(side)
     const newWindow = this.opensSubWindow(tms)
     const maxSubs = this.maxSubs()
