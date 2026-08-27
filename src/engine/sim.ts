@@ -2272,16 +2272,17 @@ export class MatchEngine {
     }
     if (st.phase === 'break_before_extra') {
       st.phase = 'extra_first_half'
-      // affectation absolue : un `+=` hériterait du temps additionnel de la
-      // seconde mi-temps et l'horloge finirait à 121', 122'… Le temps
-      // additionnel reste ce qu'il est, un arrêt de jeu du temps réglementaire.
-      st.periodEndTick = HALF_TICKS * 2 + EXTRA_HALF_TICKS
+      // `+=` : le tick est un compteur continu et chaque période de
+      // prolongation dure ses quinze minutes pleines. L'arrêt de jeu du temps
+      // réglementaire est déjà consommé — c'est l'AFFICHAGE qui le retranche
+      // (MatchScreen), pas la durée de jeu qui en est amputée.
+      st.periodEndTick += EXTRA_HALF_TICKS
       this.resetPositions('home')
       return
     }
     // extra_halftime
     st.phase = 'extra_second_half'
-    st.periodEndTick = HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2
+    st.periodEndTick += EXTRA_HALF_TICKS
     this.resetPositions('away')
   }
 

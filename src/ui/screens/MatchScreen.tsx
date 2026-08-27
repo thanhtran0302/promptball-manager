@@ -63,18 +63,16 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
   }, [controller])
 
   const st = engine.state
-  const minute = Math.floor((st.tick * 0.1) / 60)
-  // 90+n en fin de temps réglementaire, puis 91-105 / 105+n / 106-120 en
-  // prolongation : la minute brute suffit, seuls les dépassements se nomment
+  // Le tick court sans discontinuer : en prolongation il porte encore l'arrêt
+  // de jeu de la seconde mi-temps, déjà joué. On le retranche à l'affichage —
+  // la prolongation montre alors 90 → 105 puis 105 → 120, tout en durant
+  // réellement deux fois quinze minutes. Seul le temps réglementaire nomme ses
+  // dépassements (90+n) ; les deux périodes de prolongation s'arrêtent pile.
   const regulationEnd = 90
-  const extraFirstEnd = 105
-  const minuteLabel = isExtraTime(st.phase)
-    ? minute > extraFirstEnd && st.phase === 'extra_first_half'
-      ? `105+${minute - extraFirstEnd}'`
-      : `${minute}'`
-    : minute >= regulationEnd
-      ? `90+${minute - regulationEnd}'`
-      : `${minute}'`
+  const extraTime = isExtraTime(st.phase)
+  const minute = Math.floor((st.tick * 0.1 - (extraTime ? st.addedTimeSec : 0)) / 60)
+  const minuteLabel =
+    !extraTime && minute >= regulationEnd ? `90+${minute - regulationEnd}'` : `${minute}'`
 
   const breakLabel =
     st.phase === 'halftime' ? 'MT' : st.phase === 'break_before_extra' ? "Fin 90'" : 'MT prol.'

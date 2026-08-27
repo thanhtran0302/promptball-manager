@@ -1050,13 +1050,37 @@ describe('prolongation', () => {
       )
       if (engine.state.tick < HALF_TICKS * 2 + EXTRA_HALF_TICKS) continue
       extraTimeMatches++
-      // l'horloge de la prolongation s'arrête pile à 120:00 : le temps
-      // additionnel appartient au temps réglementaire, il ne s'hérite pas
-      expect(engine.state.tick).toBe(HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2)
       lateSubs += engine.state.events.filter((e) => e.type === 'sub' && e.tick >= HALF_TICKS * 2).length
     }
     expect(extraTimeMatches).toBeGreaterThanOrEqual(2)
     expect(lateSubs).toBeGreaterThanOrEqual(1)
+  })
+
+  /**
+   * La durée de jeu est la propriété qui compte, et elle est distincte de la
+   * minute affichée : le tick est un compteur continu qui porte encore l'arrêt
+   * de jeu de la seconde mi-temps, mais chaque période de prolongation doit
+   * durer ses quinze minutes pleines. Une affectation absolue de periodEndTick
+   * amputerait la première période du temps additionnel (12 à 14,5 min jouées)
+   * pour ne corriger qu'un défaut d'affichage.
+   */
+  it('joue deux périodes de prolongation de quinze minutes pleines', () => {
+    const engine = atExtraTimeBreak()
+    const st = engine.state
+
+    const startFirst = st.tick
+    // le temps additionnel de la seconde mi-temps est bien déjà écoulé
+    expect(startFirst).toBeGreaterThan(HALF_TICKS * 2)
+    engine.startNextPeriod()
+    expect(st.periodEndTick - startFirst).toBe(EXTRA_HALF_TICKS)
+
+    let guard = 0
+    while (st.phase === 'extra_first_half' && guard++ < 100) engine.runTicks(500)
+    expect(st.phase).toBe('extra_halftime')
+
+    const startSecond = st.tick
+    engine.startNextPeriod()
+    expect(st.periodEndTick - startSecond).toBe(EXTRA_HALF_TICKS)
   })
 
   /**
