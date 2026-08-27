@@ -783,12 +783,18 @@ describe('MatchEngine', () => {
     let goals = 0
     let nilNil = 0
     for (const seed of seeds) {
+      // les deux bancs sont gérés, comme au harnais de référence
+      // (scripts/sim.ts) : sans ça, une blessure laisse l'équipe à dix
+      // jusqu'au coup de sifflet final et le test mesure un artefact de
+      // configuration (aucun entraîneur sur aucun banc) plutôt que le
+      // niveau de l'effectif.
       const engine = new MatchEngine({
         home,
         away,
         homeInstructions: defaultInstructions(),
         awayInstructions: defaultInstructions(),
         seed,
+        autoSubSides: ['home', 'away'],
       })
       let guard = 0
       while (engine.state.phase !== 'finished' && guard++ < 500) {
@@ -1137,6 +1143,31 @@ describe('prolongation', () => {
     const r = engine.makeSub('home', lineup[7], bench[5])
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/5\/5/)
+  })
+
+  it('produit un taux de blessures réaliste (20 matchs)', () => {
+    let out = 0
+    let knocks = 0
+    for (let s = 0; s < 20; s++) {
+      const engine = playOut(
+        new MatchEngine({
+          home,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: 300 + s * 131,
+        }),
+      )
+      for (const lp of Object.values(engine.state.players)) {
+        if (lp.injury === 'out') out++
+        else if (lp.injury === 'knock') knocks++
+      }
+    }
+    // cibles UEFA (~8 blessures / 1000 h de match) : 0,25-0,45 sortie/match
+    expect(out / 20).toBeGreaterThanOrEqual(0.25)
+    expect(out / 20).toBeLessThanOrEqual(0.45)
+    expect(knocks / 20).toBeGreaterThanOrEqual(0.8)
+    expect(knocks / 20).toBeLessThanOrEqual(1.6)
   })
 })
 

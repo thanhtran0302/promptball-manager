@@ -55,15 +55,6 @@ export function runAutoSub(engine: MatchEngine, side: Side, done: Set<string>): 
   const tms = st[side]
   const byId = new Map(tms.team.players.map((p) => [p.id, p]))
 
-  // ponytail: le banc est pris dans l'ordre de l'effectif, qui est déjà trié par
-  // niveau dans les données. Un vrai choix (note × fraîcheur × poste) demanderait
-  // un modèle d'évaluation ; à ajouter si le bench montre des entrées absurdes.
-  const pool = tms.team.players.filter((p) => {
-    const lp = st.players[p.id]
-    return lp && !lp.onPitch && !lp.sentOff && !lp.subbedOff && p.role !== 'GK'
-  })
-  if (pool.length === 0) return
-
   const drop = trigger === 'ht' ? HALFTIME_WORN_DROP : WORN_DROP
   const tired = tms.lineup
     .filter((id) => {
@@ -75,14 +66,26 @@ export function runAutoSub(engine: MatchEngine, side: Side, done: Set<string>): 
   let made = 0
   for (const outId of tired) {
     if (made >= MAX_PER_WINDOW || !engine.canSub(side)) break
-    const outRole = byId.get(outId)!.role
-    // doublure au poste si elle existe, sinon le meilleur restant : laisser un
-    // joueur cuit sur le terrain coûte plus cher qu'un poste approximatif
-    const at = pool.findIndex((p) => p.role === outRole)
-    const idx = at >= 0 ? at : 0
-    if (!engine.makeSub(side, outId, pool[idx].id).ok) break
-    pool.splice(idx, 1)
+    const inId = pickReplacement(engine, side, outId)
+    if (!inId) break
+    if (!engine.makeSub(side, outId, inId).ok) break
     made++
-    if (pool.length === 0) break
   }
+}
+
+/**
+ * Remplaçant retenu pour un sortant donné : doublure au poste si elle existe,
+ * sinon le meilleur restant. Laisser un poste vacant coûte plus cher qu'un
+ * poste approximatif.
+ */
+export function pickReplacement(engine: MatchEngine, side: Side, outId: string): string | null {
+  const st = engine.state
+  const tms = st[side]
+  const outRole = tms.team.players.find((p) => p.id === outId)?.role
+  const pool = tms.team.players.filter((p) => {
+    const lp = st.players[p.id]
+    return lp && !lp.onPitch && !lp.sentOff && !lp.subbedOff && lp.injury === 'none' && p.role !== 'GK'
+  })
+  if (pool.length === 0) return null
+  return (pool.find((p) => p.role === outRole) ?? pool[0]).id
 }

@@ -2,7 +2,7 @@
 // Home attaque vers x=105, away vers x=0.
 
 import { Rng } from './rng'
-import { runAutoSub } from './autoSub'
+import { runAutoSub, pickReplacement } from './autoSub'
 import {
   FORMATION_SLOTS,
   assignSlots,
@@ -145,6 +145,27 @@ export const MAX_SUB_WINDOWS = 3
  */
 const INJURY_SPEED_MUL = 0.85
 const INJURY_ENDURANCE_MUL = 0.8
+
+/**
+ * Risque de blessure. Deux sources, les deux dominantes en vrai : le contact
+ * (faute subie, tacle propre encaissé) et la lésion musculaire (sprint sur
+ * des jambes vides). Cibles UEFA (~8 blessures / 1000 h) : 0,25-0,45
+ * sortie/match et 0,8-1,6 touché/match, toutes équipes confondues.
+ * Mesuré : 0,30 sortie/match et 1,00 touché/match sur 40 matchs (sonde
+ * `scripts/probe-injuries.ts`).
+ * Mesure d'isolement (INJURY_SPEED_MUL et INJURY_ENDURANCE_MUL remis à 1,
+ * sans rien changer d'autre) : sur un effectif de Ligue 3 (20 matchs), le
+ * malus de touché ne coûte que 0,05 but/match (1,75 → 1,80) ; l'essentiel de
+ * l'écart avec la baseline sans blessure (2,00) vient donc du niveau du banc
+ * de remplacement, pas du malus du joueur diminué.
+ */
+const INJURY_ON_FOUL = 0.05
+const INJURY_ON_CLEAN_TACKLE = 0.008
+/** Risque par tick de sprint, nul au-dessus de INJURY_FATIGUE_FROM. */
+const INJURY_SPRINT_BASE = 0.0004
+const INJURY_FATIGUE_FROM = 70
+/** Part des blessures qui obligent à sortir ; le reste laisse un joueur diminué. */
+const INJURY_SEVERE = 0.22
 
 /**
  * Part des duels gagnés qui chassent le ballon hors du terrain au lieu de le
@@ -1039,6 +1060,62 @@ export class MatchEngine {
   }
 
   /**
+   * Blessure. La gravité est un tirage séparé du déclenchement : le taux de
+   * sorties et le taux de touchés se calibrent alors indépendamment.
+   * Un joueur déjà 'out' n'est plus concerné ; un 'knock' peut s'aggraver.
+   */
+  private injure(side: Side, playerId: string, cause: 'contact' | 'muscle') {
+    const st = this.state
+    const lp = st.players[playerId]
+    if (!lp || !lp.onPitch || lp.injury === 'out') return
+
+    const severe = this.rng.chance(INJURY_SEVERE)
+    const how = cause === 'contact' ? 'touché sur l’action' : 'se tient la cuisse'
+    if (!severe) {
+      if (lp.injury === 'knock') return // déjà diminué, rien de neuf à dire
+      lp.injury = 'knock'
+      this.log('injury', `🤕 ${this.nameOf(playerId)} ${how} — il reste sur le terrain, diminué.`, side, playerId)
+      return
+    }
+
+    lp.injury = 'out'
+    lp.onPitch = false
+    this.sliceTargets.delete(playerId)
+    this.presserRanks.delete(playerId)
+    if (st.ball.carrierId === playerId) {
+      st.ball.carrierId = null
+      const winner = this.nearestTo(st.ball.x, st.ball.y)
+      if (winner) {
+        st.ball.carrierId = winner.id
+        st.possession = winner.side
+      }
+    }
+    this.log('injury', `🚑 ${this.nameOf(playerId)} ne peut pas continuer, il quitte le terrain.`, side, playerId)
+    this.forcedSub(side, playerId)
+  }
+
+  /**
+   * Sortie sur blessure : le camp auto-coaché remplace immédiatement, hors
+   * rendez-vous. Une blessure consomme un joueur et une fenêtre — le règlement
+   * ne prévoit aucune exemption. Le camp humain décide lui-même, y compris de
+   * finir à dix. Quota épuisé ou banc vide : l'équipe joue en infériorité.
+   */
+  private forcedSub(side: Side, playerId: string) {
+    const tms = this.tms(side)
+    const short = () =>
+      this.log(
+        'info',
+        `${tms.team.short} n'a plus de solution sur le banc : l'équipe finit à ${tms.lineup.filter((id) => this.state.players[id].onPitch).length}.`,
+        side,
+      )
+    if (!this.autoSubSides.includes(side)) return
+    if (!this.canSub(side)) return short()
+    const inId = pickReplacement(this, side, playerId)
+    if (!inId) return short()
+    if (!this.makeSub(side, playerId, inId).ok) short()
+  }
+
+  /**
    * Penalty : temps mort, tireur désigné (meilleur tir + sang-froid),
    * résolution un coup — la frappe voyage jusqu'au but via un transit tir.
    */
@@ -1550,6 +1627,9 @@ export class MatchEngine {
       this.bumpRating(first.id, RATING.foul)
       this.log('foul', `Faute de ${this.nameOf(first.id)} sur ${this.nameOf(carrier.id)}.`, oppSide, first.id, carrier.x, carrier.y)
 
+      // le fauté encaisse le contact : première source de blessure en vrai
+      if (this.rng.chance(INJURY_ON_FOUL)) this.injure(carrier.side, carrier.id, 'contact')
+
       // faute dans la surface de réparation → penalty ?
       const goal = this.attackedGoal(carrier.side)
       const inBox = Math.abs(carrier.x - goal.x) < 16.5 && Math.abs(carrier.y - PITCH.W / 2) < 20.16
@@ -1591,6 +1671,7 @@ export class MatchEngine {
     this.bumpRating(first.id, RATING.tackleWon)
     this.bumpRating(carrier.id, RATING.dispossessed)
     this.log('tackle', `Beau tacle de ${this.nameOf(first.id)} !`, oppSide, first.id)
+    if (this.rng.chance(INJURY_ON_CLEAN_TACKLE)) this.injure(carrier.side, carrier.id, 'contact')
     this.lastPasserId = null
 
     // un tacle sur deux environ chasse le ballon hors du terrain plutôt que de
@@ -1696,7 +1777,15 @@ export class MatchEngine {
         const mps = step / TICK_SEC
         if (mps > SPRINT_WALK) {
           lp.stats.runningTicks++
-          if (mps > SPRINT_SPEED) lp.stats.sprintTicks++
+          if (mps > SPRINT_SPEED) {
+            lp.stats.sprintTicks++
+            // lésion musculaire : le risque n'existe que sur des jambes déjà
+            // entamées, et croît à mesure que la fraîcheur tombe
+            if (lp.stamina < INJURY_FATIGUE_FROM) {
+              const fatigue = (INJURY_FATIGUE_FROM - lp.stamina) / INJURY_FATIGUE_FROM
+              if (this.rng.chance(INJURY_SPRINT_BASE * fatigue)) this.injure(lp.side, lp.id, 'muscle')
+            }
+          }
         }
       }
 
@@ -2302,7 +2391,10 @@ export class MatchEngine {
       }
     const out = st.players[outId]
     const inc = st.players[inId]
-    if (!out || !out.onPitch) return { ok: false, error: `${this.nameOf(outId)} n'est pas sur le terrain.` }
+    // un blessé qui a quitté le terrain reste remplaçable — c'est même le seul
+    // cas où le sortant n'est pas sur la pelouse. L'exclu, lui, ne l'est pas.
+    if (!out || (!out.onPitch && out.injury !== 'out'))
+      return { ok: false, error: `${this.nameOf(outId)} n'est pas sur le terrain.` }
     if (!inc || inc.onPitch) return { ok: false, error: `${this.nameOf(inId)} est déjà sur le terrain.` }
     if (inc.subbedOff) return { ok: false, error: `${this.nameOf(inId)} a déjà été remplacé.` }
     if (inc.sentOff) return { ok: false, error: `${this.nameOf(inId)} a été exclu.` }
