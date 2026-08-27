@@ -78,8 +78,16 @@ Chantiers :
 - [ ] **Touches sous la cible** : 26 par match contre ~40. Bloqué par la borne de temps
       morts (voir le chantier des bornes) : plus de sorties = moins de jeu effectif
 - [ ] **Décisions secondaires du porteur** (option de repli si solution marquée)
-- [ ] **Blessures** (risque par action, gravité, remplacement forcé) — version légère,
-      pas le système médical complet (déverrouillé)
+- [x] **Blessures** : deux gravités — « touché » (reste en jeu, vitesse ×0,85 et
+      endurance ×0,8 jusqu'à la fin du match, ne guérit pas) et « sortant » (quitte le
+      terrain, son poste reste dans la composition). Deux sources de risque : le contact
+      sur faute, et la lésion musculaire sur sprint en dessous de 70 de fraîcheur. Taux
+      mesurés sur 40 matchs, toutes équipes confondues : 0,30 sortie/match et 1,00
+      touché/match, contre une cible de 0,25-0,45 et 0,8-1,6 tirée des études
+      d'exposition UEFA. Remplacement forcé immédiat pour un camp géré par le coach
+      automatique ; le camp humain décide lui-même, y compris de finir à dix ; quota
+      épuisé ou banc vide, l'équipe joue en infériorité. Un gardien blessé est remplacé
+      par un gardien — version légère, pas le système médical complet (déverrouillé)
 - [ ] Mode **temps forts** (intégral / étendu / clés) — le rythme de visionnage FM
 
 **Chantiers de méthode** (le bench lui-même) :
@@ -88,7 +96,13 @@ Chantiers :
       ~34 % (le viser force le taux d'arrêt du gardien 3 points au-dessus du réel) ;
       plafond `Temps morts` à 35 % quand un vrai match est à ~43 % (ce qui interdit les
       40 touches) ; fenêtre `Buts / match` large de 0,5 quand l'erreur d'échantillonnage
-      à N=30 est de ±0,33, donc la mesure bat
+      à N=30 est de ±0,33, donc la mesure bat. Mesuré pendant le chantier blessures et
+      prolongation : la borne `Tirs cadrés` ressort à 34,7 % à N=30 et à 37,4 % à N=150
+      pour un même code. Comparé au code d'avant les blessures, l'écart entre les deux
+      versions vaut 1,1 point à N=30 mais seulement 0,3 point à N=150 — le bruit
+      d'échantillonnage domine la mesure à N=30. Le test « effectif de Ligue 3 » a
+      rencontré le même problème : 1,60 but/match sur 20 seeds contre 1,93 sur 60, pour
+      un plancher à 1,6 ; il a été porté à 60 seeds, son seuil inchangé
 - [ ] **Référence de bench neutre.** `--check` mesure sur les deux équipes fictives, qui
       tournent à 68 de technique et 67 de décisions quand la Ligue 3 réelle est à 51 et
       57 — alors que les formules du moteur s'ancrent sur 50 = joueur moyen. Un moteur
@@ -120,6 +134,13 @@ Chantiers :
       (`src/engine/autoSub.ts`) fait enfin tourner l'IA — 4 changements en 2 fenêtres
       par match, fraîcheur minimale de fin de match remontée de 65,6 à 70,0. Un joueur
       remplacé ne peut plus revenir en jeu
+- [x] **Prolongation en match à élimination directe** (`MatchOptions.knockout`) : jouée
+      quand le score est nul à la fin du temps réglementaire, deux périodes de 15
+      minutes. 6e remplacement et 4e fenêtre accordés en prolongation, conformément à
+      l'IFAB, dès la coupure qui la précède. Les trois pauses — mi-temps, coupure avant
+      prolongation, mi-temps de prolongation — ne consomment aucune fenêtre. Limite
+      assumée : pas de séance de tirs au but, donc un match à élimination directe peut
+      se terminer sur un nul après 120 minutes ; le moteur le journalise explicitement
 - [ ] **Plans de match multi-étapes** : « si mené à la 60', 4-2-4 ; si rouge, 5-4-0 »
       — déclencheurs score/minute/carton/fatigue, IA adverse avec ses propres plans.
       Le coach automatique ne connaît que la fatigue : il ne réagit ni au score, ni aux

@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { MatchEngine } from '../src/engine/sim'
 import { defaultInstructions } from '../src/engine/instructions'
-import type { MatchInstructions, Team } from '../src/engine/types'
+import { isBreak, type MatchInstructions, type Team } from '../src/engine/types'
 import { TEAMS } from '../src/data/teams'
 
 const args = process.argv.slice(2)
@@ -99,7 +99,7 @@ function run(matches: number, homeInstr: MatchInstructions, awayInstr: MatchInst
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 200) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (isBreak(engine.state.phase)) engine.startNextPeriod()
     }
     const st = engine.state
     agg.goals[0] += st.score.home

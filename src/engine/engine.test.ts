@@ -4,7 +4,7 @@ import { defaultInstructions, validateInstructions } from './instructions'
 import { attackTarget, type AttackSliceInput } from './slices'
 import { TEAMS } from '../data/teams'
 import { FORMATION_SLOTS } from './formations'
-import type { Player, Team } from './types'
+import { EXTRA_HALF_TICKS, HALF_TICKS, TICK_SEC, isBreak, isExtraTime, type Player, type Team } from './types'
 
 const [home, away] = TEAMS
 
@@ -19,7 +19,7 @@ function runFullMatch(seed = 42) {
   let guard = 0
   while (engine.state.phase !== 'finished' && guard++ < 500) {
     engine.runTicks(500)
-    if (engine.state.phase === 'halftime') engine.startSecondHalf()
+    if (engine.state.phase === 'halftime') engine.startNextPeriod()
   }
   return engine
 }
@@ -275,7 +275,7 @@ describe('MatchEngine', () => {
     expect(engine.state.home.subsUsed).toBe(4)
     expect(engine.state.home.subWindows).toBe(3)
     // la reprise n'hérite pas d'une fenêtre restée ouverte
-    engine.startSecondHalf()
+    engine.startNextPeriod()
     engine.runTicks(1)
     expect(engine.makeSub('home', lineup[6], bench[4]).ok).toBe(false)
   })
@@ -305,7 +305,7 @@ describe('MatchEngine', () => {
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 500) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
     }
     const ai = engine.state.away
     expect(ai.subsUsed).toBeGreaterThan(0)
@@ -315,6 +315,34 @@ describe('MatchEngine', () => {
     expect(engine.state.home.subsUsed).toBe(0)
     // et le gardien reste en place
     expect(engine.state.players[ai.lineup[0]].onPitch).toBe(true)
+  })
+
+  it('expose des prédicats de phase cohérents', () => {
+    expect(isBreak('halftime')).toBe(true)
+    expect(isBreak('break_before_extra')).toBe(true)
+    expect(isBreak('extra_halftime')).toBe(true)
+    expect(isBreak('first_half')).toBe(false)
+    expect(isBreak('finished')).toBe(false)
+
+    // la coupure d'avant-prolongation compte comme prolongation : l'IFAB y
+    // ouvre déjà la substitution supplémentaire
+    expect(isExtraTime('break_before_extra')).toBe(true)
+    expect(isExtraTime('extra_first_half')).toBe(true)
+    expect(isExtraTime('extra_second_half')).toBe(true)
+    expect(isExtraTime('second_half')).toBe(false)
+    expect(isExtraTime('halftime')).toBe(false)
+  })
+
+  it('pose periodEndTick sur la fin de la période courante', () => {
+    const engine = subEngine()
+    expect(engine.state.periodEndTick).toBe(HALF_TICKS)
+    let guard = 0
+    while (engine.state.phase !== 'halftime' && guard++ < 100) engine.runTicks(1000)
+    engine.startNextPeriod()
+    expect(engine.state.phase).toBe('second_half')
+    expect(engine.state.periodEndTick).toBe(
+      HALF_TICKS * 2 + Math.round(engine.state.addedTimeSec / TICK_SEC),
+    )
   })
 
   it('les instructions d\'overlap accélèrent la perte d\'endurance', () => {
@@ -327,6 +355,23 @@ describe('MatchEngine', () => {
     a.runTicks(27_000)
     b.runTicks(27_000)
     expect(a.state.players['h2'].stamina).toBeLessThan(b.state.players['h2'].stamina)
+  })
+
+  it('un joueur touché court moins vite et se vide plus vite', () => {
+    const run = (knock: boolean) => {
+      const engine = subEngine()
+      const id = engine.state.home.lineup[6] // un milieu, pas le gardien
+      if (knock) engine.state.players[id].injury = 'knock'
+      engine.runTicks(9000) // 15 minutes
+      return {
+        distance: engine.state.players[id].stats.distance,
+        stamina: engine.state.players[id].stamina,
+      }
+    }
+    const sain = run(false)
+    const touche = run(true)
+    expect(touche.distance).toBeLessThan(sain.distance)
+    expect(touche.stamina).toBeLessThan(sain.stamina)
   })
 
   it('respecte la composition titulaire explicite', () => {
@@ -405,7 +450,7 @@ describe('MatchEngine', () => {
     let guard = 0
     while (engine.state.phase !== 'finished' && guard++ < 500) {
       engine.runTicks(500)
-      if (engine.state.phase === 'halftime') engine.startSecondHalf()
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
     }
     expect(engine.state.phase).toBe('finished')
     // l'exclu n'est jamais revenu
@@ -727,40 +772,75 @@ describe('MatchEngine', () => {
   // niveau des défenseurs suit celui des attaquants. Le rendement doit donc
   // dépendre de l'ÉCART entre les deux, pas du niveau absolu.
   it('produit du football sur un effectif de Ligue 3, pas seulement sur une élite', () => {
-    // vingt seeds : un match compte deux ou trois buts, l'écart-type sur six
-    // matchs dépasse l'effet mesuré (le sous-échantillon [11..67] donne 1,17
-    // là où la moyenne est à 2,0)
+    // Les 20 seeds d'origine, complétées jusqu'à 60 par les nombres premiers
+    // suivants (139, 149, 151…) — même convention que la liste d'origine.
+    // Volontairement PAS un générateur 1..60 : un correctif sain avait fait
+    // passer ce test de 1,75 à 1,60 (sous le plancher), et remonter à 60
+    // échantillons en changeant aussi leur composition (seeds 67 à 137
+    // disparus) aurait rendu « bruit d'échantillonnage » et « échantillon
+    // différent » indissociables. En ne faisant qu'ajouter, l'affirmation
+    // « on a seulement plus d'échantillons » devient vraie par construction.
+    // Voir le commentaire au-dessus de l'assertion pour la marge mesurée.
     const seeds = [
-      11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137,
+      11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139,
+      149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241,
+      251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359,
+      367,
     ]
     const home = ligue3Squad('l3h', 'Est')
     const away = ligue3Squad('l3a', 'Ouest')
     let goals = 0
     let nilNil = 0
     for (const seed of seeds) {
+      // les deux bancs sont gérés, comme au harnais de référence
+      // (scripts/sim.ts) : sans ça, une blessure laisse l'équipe à dix
+      // jusqu'au coup de sifflet final et le test mesure un artefact de
+      // configuration (aucun entraîneur sur aucun banc) plutôt que le
+      // niveau de l'effectif.
       const engine = new MatchEngine({
         home,
         away,
         homeInstructions: defaultInstructions(),
         awayInstructions: defaultInstructions(),
         seed,
+        autoSubSides: ['home', 'away'],
       })
       let guard = 0
       while (engine.state.phase !== 'finished' && guard++ < 500) {
         engine.runTicks(500)
-        if (engine.state.phase === 'halftime') engine.startSecondHalf()
+        if (engine.state.phase === 'halftime') engine.startNextPeriod()
       }
       const total = engine.state.score.home + engine.state.score.away
       goals += total
       if (total === 0) nilNil++
     }
     const perMatch = goals / seeds.length
+    // Marge mesurée, pas supposée : 1,93 but/match sur ces 60 seeds (les 20
+    // d'origine + 40 nouveaux) pour un plancher à 1,6 — confortable, mais ce
+    // test reste par nature sensible à tout changement du moteur qui rebat
+    // le flux aléatoire (RNG partagé : un correctif qui ajoute/retire un
+    // tirage dans certains ticks rebat tous les tirages suivants du match).
+    // La marge s'était réduite le jour où la gestion de banc
+    // (`autoSubSides`) a été activée sur ce test — des réserves plus
+    // faibles que les titulaires font mécaniquement un peu moins de buts.
+    // Un échec ici doit d'abord être revérifié à N élevé (sonde jetable)
+    // avant d'être traité comme une régression : à N=20 un correctif sain
+    // avait fait passer la mesure de 1,75 à 1,60 (sous le plancher) par pur
+    // bruit d'échantillonnage. Une première remontée à N=60 via un simple
+    // générateur 1..60 avait donné 1,77 — mais cet échantillon ne
+    // recouvrait que 5 des 20 seeds d'origine, rendant « plus
+    // d'échantillons » et « échantillon différent » indissociables. Cette
+    // liste-ci ajoute strictement aux 20 seeds d'origine (rien n'est
+    // retiré), ce qui isole proprement l'effet de la taille : le résultat
+    // (1,93) confirme que la chute à 1,60 était bien du bruit, sur un
+    // échantillon qui ne doit rien à un tri favorable.
     expect(perMatch).toBeGreaterThan(1.6)
     expect(perMatch).toBeLessThan(3.6)
     // Les 0-0 existent, ils ne sont pas la norme. Borne large : à 2 buts par
-    // match, Poisson en attend déjà 13 % avec un écart-type de ±1,5 sur vingt
-    // matchs — c'est la moyenne de buts ci-dessus qui porte le test, pas ce
-    // compteur, qui ne sert qu'à repérer un moteur qui ne marque plus du tout.
+    // match, Poisson en attend déjà 13 % avec un écart-type de ±1,5 sur ces
+    // soixante matchs — c'est la moyenne de buts ci-dessus qui porte le test,
+    // pas ce compteur, qui ne sert qu'à repérer un moteur qui ne marque plus
+    // du tout.
     expect(nilNil).toBeLessThan(seeds.length / 3)
   })
 
@@ -848,6 +928,464 @@ describe('MatchEngine', () => {
 
     const timed = attackTarget('run_in_behind', { ...inp, runGamble: false }, 0.7, 0.5)
     expect(timed.tx).toBeLessThan(line)
+  })
+})
+
+describe('prolongation', () => {
+  /** Joue jusqu'à la fin en franchissant chaque pause. */
+  function playOut(engine: MatchEngine) {
+    let guard = 0
+    while (engine.state.phase !== 'finished' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (isBreak(engine.state.phase)) engine.startNextPeriod()
+    }
+    return engine
+  }
+
+  /**
+   * Cherche, sur 12 seeds au plus, un nul et une victoire à 90' (sans
+   * prolongation). Mémoïsé : les deux tests qui en ont besoin partagent la
+   * recherche au lieu de rejouer chacun jusqu'à 60 matchs complets — un nul
+   * arrive environ une fois sur quatre, 12 seeds suffisent très largement.
+   */
+  let seeds: { drawSeed: number; winSeed: number } | null = null
+  function findSeeds() {
+    if (seeds) return seeds
+    let drawSeed = -1
+    let winSeed = -1
+    for (let s = 1; s <= 12 && (drawSeed < 0 || winSeed < 0); s++) {
+      const probe = playOut(
+        new MatchEngine({
+          home,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: s,
+        }),
+      )
+      if (probe.state.score.home === probe.state.score.away) {
+        if (drawSeed < 0) drawSeed = s
+      } else if (winSeed < 0) {
+        winSeed = s
+      }
+    }
+    if (drawSeed < 0) throw new Error("aucun nul à 90' trouvé parmi les 12 premiers seeds")
+    if (winSeed < 0) throw new Error("aucune victoire à 90' trouvée parmi les 12 premiers seeds")
+    seeds = { drawSeed, winSeed }
+    return seeds
+  }
+
+  it('ne joue pas de prolongation en match de championnat', () => {
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: 5,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    expect(engine.state.tick).toBeLessThan(HALF_TICKS * 2 + 2000)
+  })
+
+  it('joue la prolongation en élimination directe si le score est nul à 90', () => {
+    const { drawSeed } = findSeeds()
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: drawSeed,
+        knockout: true,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    // 120 minutes jouées : la prolongation a bien eu lieu
+    expect(engine.state.tick).toBeGreaterThan(HALF_TICKS * 2 + EXTRA_HALF_TICKS * 2 - 10)
+    const types = engine.state.events.map((e) => e.type)
+    expect(types.filter((t) => t === 'halftime').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('ne joue pas de prolongation en élimination directe si un camp mène à 90', () => {
+    const { winSeed } = findSeeds()
+    const engine = playOut(
+      new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: winSeed,
+        knockout: true,
+      }),
+    )
+    expect(engine.state.phase).toBe('finished')
+    expect(engine.state.tick).toBeLessThan(HALF_TICKS * 2 + 2000)
+  })
+
+  /**
+   * Régression : le coach automatique n'avait aucun rendez-vous après la 90e.
+   * `trigger` valait la même constante pour les trois pauses — la mi-temps
+   * consommait la clé des deux coupures de la prolongation — et les phases de
+   * prolongation ne tombaient dans aucune branche à la minute. Mesuré alors :
+   * 480 remplacements automatiques sur 60 matchs, zéro après la 90e.
+   */
+  it('fait encore entrer des remplaçants après la 90e minute en prolongation', () => {
+    let extraTimeMatches = 0
+    let lateSubs = 0
+    for (let s = 1; s <= 10 && extraTimeMatches < 2; s++) {
+      const engine = playOut(
+        new MatchEngine({
+          // deepHome : le banc standard (4 joueurs de champ) est déjà vidé à la
+          // 75e par le coach, il ne resterait personne à faire entrer après 90'
+          home: deepHome,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: s,
+          knockout: true,
+          autoSubSides: ['home', 'away'],
+        }),
+      )
+      if (engine.state.tick < HALF_TICKS * 2 + EXTRA_HALF_TICKS) continue
+      extraTimeMatches++
+      lateSubs += engine.state.events.filter((e) => e.type === 'sub' && e.tick >= HALF_TICKS * 2).length
+    }
+    expect(extraTimeMatches).toBeGreaterThanOrEqual(2)
+    expect(lateSubs).toBeGreaterThanOrEqual(1)
+  })
+
+  /**
+   * La durée de jeu est la propriété qui compte, et elle est distincte de la
+   * minute affichée : le tick est un compteur continu qui porte encore l'arrêt
+   * de jeu de la seconde mi-temps, mais chaque période de prolongation doit
+   * durer ses quinze minutes pleines. Une affectation absolue de periodEndTick
+   * amputerait la première période du temps additionnel (12 à 14,5 min jouées)
+   * pour ne corriger qu'un défaut d'affichage.
+   */
+  it('joue deux périodes de prolongation de quinze minutes pleines', () => {
+    const engine = atExtraTimeBreak()
+    const st = engine.state
+
+    const startFirst = st.tick
+    // le temps additionnel de la seconde mi-temps est bien déjà écoulé
+    expect(startFirst).toBeGreaterThan(HALF_TICKS * 2)
+    engine.startNextPeriod()
+    expect(st.periodEndTick - startFirst).toBe(EXTRA_HALF_TICKS)
+
+    let guard = 0
+    while (st.phase === 'extra_first_half' && guard++ < 100) engine.runTicks(500)
+    expect(st.phase).toBe('extra_halftime')
+
+    const startSecond = st.tick
+    engine.startNextPeriod()
+    expect(st.periodEndTick - startSecond).toBe(EXTRA_HALF_TICKS)
+  })
+
+  /**
+   * Amène un match d'élimination directe jusqu'à la coupure d'avant-prolongation,
+   * en repartant du seed de nul déjà trouvé par findSeeds() plutôt que d'en
+   * chercher un nouveau : assignSlots ne dépend pas du seed, deepHome et home
+   * composent donc le même onze de départ, et le seed reste valide.
+   */
+  function atExtraTimeBreak(): MatchEngine {
+    const { drawSeed } = findSeeds()
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: drawSeed,
+      knockout: true,
+    })
+    let guard = 0
+    while (engine.state.phase !== 'finished' && engine.state.phase !== 'break_before_extra' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    if (engine.state.phase !== 'break_before_extra') {
+      throw new Error("le seed de nul mémoïsé n'atteint pas la coupure d'avant-prolongation avec deepHome")
+    }
+    return engine
+  }
+
+  it('accorde un 6e changement et une 4e fenêtre en prolongation', () => {
+    const engine = atExtraTimeBreak()
+    const bench = benchIds(engine)
+    // il faut 7 remplaçants de champ (5 + le 6e + celui refusé) : deepHome
+    // en fournit 8, contre 4 seulement pour l'effectif standard.
+    expect(bench.length).toBeGreaterThanOrEqual(7)
+    const onPitch = () => engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch)
+
+    // épuiser 5 joueurs et 3 fenêtres pendant le temps réglementaire est déjà
+    // couvert ailleurs : ici on part de la coupure et on vérifie les plafonds
+    expect(engine.state.phase).toBe('break_before_extra')
+    // la coupure est gratuite : cinq changements possibles sans fenêtre
+    let used = 0
+    for (let i = 0; i < 5 && used < 5; i++) {
+      const out = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+      if (engine.makeSub('home', out, bench[used]).ok) used++
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+    expect(engine.state.home.subWindows).toBe(0)
+
+    // le 6e passe : la prolongation en accorde un de plus
+    const out6 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    expect(engine.makeSub('home', out6, bench[5]).ok).toBe(true)
+    expect(engine.state.home.subsUsed).toBe(6)
+
+    // le 7e est refusé
+    const out7 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    const r = engine.makeSub('home', out7, bench[6])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/6\/6/)
+  })
+
+  it('ouvre une 4e fenêtre en prolongation, distincte du plafond de joueurs', () => {
+    const { drawSeed } = findSeeds()
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: drawSeed,
+      knockout: true,
+    })
+    const bench = benchIds(engine)
+    expect(bench.length).toBeGreaterThanOrEqual(5)
+    const onPitch = () => engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch)
+
+    // amène le match tout près de la fin de la 2e mi-temps : consommer les
+    // fenêtres tôt dans le match changerait qui est sur le terrain pendant
+    // des dizaines de minutes et casserait le nul à 90' sur lequel repose tout
+    // le test (vérifié empiriquement) ; à quelques secondes de la fin, plus
+    // aucun remplacement ne peut encore influer sur le score du temps réglementaire.
+    let guard = 0
+    while (engine.state.phase !== 'second_half' && engine.state.phase !== 'finished' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    guard = 0
+    while (
+      engine.state.phase === 'second_half' &&
+      engine.state.periodEndTick - engine.state.tick > 60 &&
+      guard++ < 30000
+    ) {
+      engine.runTicks(1)
+    }
+    expect(engine.state.phase).toBe('second_half')
+
+    // consomme les 3 fenêtres réglementaires en jeu, avant la coupure : sans
+    // cela, un remplacement en prolongation n'exercerait rien de plus que
+    // l'ancien plafond fixe (3), et le test passerait pour une mauvaise raison.
+    for (let i = 0; i < 3; i++) {
+      engine.runTicks(1)
+      const out = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+      expect(engine.makeSub('home', out, bench[i]).ok).toBe(true)
+    }
+    expect(engine.state.home.subWindows).toBe(3)
+
+    // termine le temps réglementaire jusqu'à la coupure d'avant-prolongation
+    guard = 0
+    while (engine.state.phase !== 'finished' && engine.state.phase !== 'break_before_extra' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    expect(engine.state.phase).toBe('break_before_extra')
+    expect(engine.state.home.subWindows).toBe(3) // la coupure elle-même n'ouvre aucune fenêtre
+
+    // franchit la coupure : on est en jeu, pas en pause
+    engine.startNextPeriod()
+    engine.runTicks(1)
+    expect(engine.state.phase).toBe('extra_first_half')
+
+    // un remplacement en jeu ouvre la 4e fenêtre, celle qu'accorde la prolongation
+    const out4 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    expect(engine.makeSub('home', out4, bench[3]).ok).toBe(true)
+    expect(engine.state.home.subWindows).toBe(4)
+
+    // une 5e fenêtre, plus tard dans le même temps de jeu, est refusée — le
+    // message et le nombre de joueurs utilisés prouvent que c'est bien le
+    // plafond de fenêtres qui a mordu, pas celui des joueurs
+    engine.runTicks(1)
+    const out5 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    const r = engine.makeSub('home', out5, bench[4])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/fenêtre/)
+    expect(engine.state.home.subsUsed).toBeLessThan(6)
+  })
+
+  it('refuse le 6e changement pendant le temps réglementaire', () => {
+    const engine = subEngine()
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    let n = 0
+    for (const perWindow of [2, 2, 1]) {
+      engine.runTicks(1)
+      for (let k = 0; k < perWindow; k++, n++) {
+        expect(engine.makeSub('home', lineup[n + 1], bench[n]).ok).toBe(true)
+      }
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+    const r = engine.makeSub('home', lineup[7], bench[5])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/5\/5/)
+  })
+
+  // 60 matchs et non 20 : à 20, le plancher de 0,25 sortie/match tenait à six
+  // sorties observées — une de moins et le test bascule. Bornes inchangées.
+  it('produit un taux de blessures réaliste (60 matchs)', () => {
+    let out = 0
+    let knocks = 0
+    for (let s = 0; s < 60; s++) {
+      const engine = playOut(
+        new MatchEngine({
+          home,
+          away,
+          homeInstructions: defaultInstructions(),
+          awayInstructions: defaultInstructions(),
+          seed: 300 + s * 131,
+        }),
+      )
+      for (const lp of Object.values(engine.state.players)) {
+        if (lp.injury === 'out') out++
+        else if (lp.injury === 'knock') knocks++
+      }
+    }
+    // cibles UEFA (~8 blessures / 1000 h de match) : 0,25-0,45 sortie/match
+    expect(out / 60).toBeGreaterThanOrEqual(0.25)
+    expect(out / 60).toBeLessThanOrEqual(0.45)
+    expect(knocks / 60).toBeGreaterThanOrEqual(0.8)
+    expect(knocks / 60).toBeLessThanOrEqual(1.6)
+  })
+
+  // Régression : un coup franc réattribuait le ballon au fauté même quand une
+  // blessure venait de le sortir (et remplacer) 30 lignes plus haut — un
+  // fantôme hors terrain tirait son propre coup franc. Invariant testé
+  // directement, tick par tick, plutôt que le seul scénario qui l'a révélé :
+  // sinon on ne rattrape que ce cas précis, pas la classe de bug.
+  it("le porteur du ballon, s'il existe, est toujours sur le terrain (invariant, à chaque tick)", () => {
+    for (let s = 0; s < 10; s++) {
+      const engine = new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: 700 + s * 131,
+        autoSubSides: ['home', 'away'],
+      })
+      let guard = 0
+      while (engine.state.phase !== 'finished' && guard++ < 200_000) {
+        engine.runTicks(1)
+        if (isBreak(engine.state.phase)) engine.startNextPeriod()
+        const carrierId = engine.state.ball.carrierId
+        if (carrierId) expect(engine.state.players[carrierId].onPitch).toBe(true)
+      }
+      expect(engine.state.phase).toBe('finished')
+    }
+  })
+})
+
+describe('sortie sur blessure et remplacement forcé', () => {
+  /**
+   * Tire `injure` jusqu'à obtenir une blessure sévère ('out'), plafonné à 50
+   * essais pour ne jamais boucler indéfiniment. Le tirage de gravité est
+   * aléatoire (22 % de sévérité) : conditionner les assertions à
+   * `injury === 'out'` les aurait laissées ne rien vérifier une fois sur cinq
+   * quand le tirage ne sort pas. Ici la boucle force le cas, et l'assertion
+   * qui suit échoue explicitement si les 50 essais n'y sont pas parvenus.
+   */
+  function forceOut(engine: MatchEngine, side: 'home' | 'away', victim: string, cause: 'contact' | 'muscle') {
+    for (let i = 0; i < 50 && engine.state.players[victim].injury !== 'out'; i++) {
+      // @ts-expect-error accès direct à la méthode privée pour le test
+      engine.injure(side, victim, cause)
+    }
+  }
+
+  it('permet de remplacer un blessé sorti, jamais un exclu', () => {
+    const engine = subEngine()
+    engine.runTicks(1)
+    const bench = benchIds(engine)
+    const injured = engine.state.home.lineup[4]
+    engine.state.players[injured].injury = 'out'
+    engine.state.players[injured].onPitch = false
+    expect(engine.makeSub('home', injured, bench[0]).ok).toBe(true)
+
+    const excluded = engine.state.home.lineup[5]
+    engine.state.players[excluded].sentOff = true
+    engine.state.players[excluded].onPitch = false
+    engine.runTicks(1)
+    expect(engine.makeSub('home', excluded, bench[1]).ok).toBe(false)
+  })
+
+  it('le coach automatique remplace immédiatement un blessé sorti, hors rendez-vous', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['away'],
+    })
+    engine.runTicks(600) // 1 minute de jeu : bien avant tout rendez-vous (60e, 75e, mi-temps)
+    const victim = engine.state.away.lineup.find(
+      (id) => engine.state.players[id].onPitch && away.players.find((p) => p.id === id)!.role !== 'GK',
+    )!
+    const before = engine.state.away.subsUsed
+    forceOut(engine, 'away', victim, 'contact')
+    expect(engine.state.players[victim].injury).toBe('out')
+    expect(engine.state.away.subsUsed).toBe(before + 1)
+    expect(engine.state.away.lineup).not.toContain(victim)
+  })
+
+  it('finit à dix quand le quota est épuisé au moment de la blessure', () => {
+    // 'home' doit être un côté auto-coaché : sinon forcedSub renvoie avant
+    // même de regarder le quota, et le test ne prouverait rien de plus que
+    // « un côté humain ne se fait jamais remplacer », pas que le quota épuisé
+    // est bien la cause de l'infériorité numérique.
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['home'],
+    })
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    let n = 0
+    for (const perWindow of [2, 2, 1]) {
+      engine.runTicks(1)
+      for (let k = 0; k < perWindow; k++, n++) engine.makeSub('home', lineup[n + 1], bench[n])
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+
+    const victim = engine.state.home.lineup.find(
+      (id) => engine.state.players[id].onPitch && deepHome.players.find((p) => p.id === id)!.role !== 'GK',
+    )!
+    forceOut(engine, 'home', victim, 'muscle')
+    expect(engine.state.players[victim].injury).toBe('out')
+    const onPitch = engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch).length
+    expect(onPitch).toBe(10)
+  })
+
+  it('un gardien blessé sorti est remplacé par un gardien du banc, pas par un joueur de champ', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['home'],
+    })
+    const gk = engine.state.home.lineup.find((id) => home.players.find((p) => p.id === id)!.role === 'GK')!
+    forceOut(engine, 'home', gk, 'contact')
+    expect(engine.state.players[gk].injury).toBe('out')
+
+    const inGoal = engine.state.home.lineup.find((id) => home.players.find((p) => p.id === id)!.role === 'GK')!
+    expect(inGoal).not.toBe(gk)
+    expect(home.players.find((p) => p.id === inGoal)!.role).toBe('GK')
   })
 })
 

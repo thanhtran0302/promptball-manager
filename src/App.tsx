@@ -19,6 +19,7 @@ export default function App() {
   const [instructions, setInstructions] = useState<MatchInstructions>(() => defaultInstructions())
   const [engine, setEngine] = useState<MatchEngine | null>(null)
   const [matchVersion, setMatchVersion] = useState(0)
+  const [knockout, setKnockout] = useState(false)
 
   const userTeam = ALL_TEAMS.find((t) => t.id === userTeamId)!
   const opponent = ALL_TEAMS.find((t) => t.id !== userTeamId)!
@@ -41,6 +42,7 @@ export default function App() {
         awayInstructions: defaultInstructions(),
         seed,
         autoSubSides: ['away'],
+        knockout,
       }),
     )
     setMatchVersion((v) => v + 1)
@@ -58,6 +60,7 @@ export default function App() {
         awayInstructions: engine.state.away.instructions,
         seed,
         autoSubSides: ['away'],
+        knockout,
       }),
     )
     setMatchVersion((v) => v + 1)
@@ -98,6 +101,8 @@ export default function App() {
           onGoSquad={() => setScreen('squad')}
           settings={settings}
           onUpdateSettings={updateSettings}
+          knockout={knockout}
+          onToggleKnockout={setKnockout}
         />
       )}
       {screen === 'squad' && (

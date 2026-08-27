@@ -21,7 +21,7 @@ export function PostMatchScreen({ engine, userTeam, opponent, onReplay, onNewMat
       .sort((a, b) => b.lp.stats.rating - a.lp.stats.rating)
 
   const timeline = st.events.filter((ev) =>
-    ['goal', 'yellow_card', 'red_card', 'penalty', 'sub', 'halftime', 'fulltime', 'info'].includes(ev.type),
+    ['goal', 'yellow_card', 'red_card', 'penalty', 'sub', 'injury', 'halftime', 'fulltime', 'info'].includes(ev.type),
   )
 
   return (

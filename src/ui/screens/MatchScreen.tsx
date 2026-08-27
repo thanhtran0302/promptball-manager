@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { MAX_SUBS, MAX_SUB_WINDOWS, type MatchEngine } from '../../engine/sim'
-import type { Team, MatchInstructions } from '../../engine/types'
+import type { MatchEngine } from '../../engine/sim'
+import { isBreak, isExtraTime, type Team, type MatchInstructions } from '../../engine/types'
 import type { LLMSettings } from '../../llm/presets'
 import { MatchController, SPEEDS, type Speed } from '../../game/controller'
 import { CANVAS_H, CANVAS_W, drawMatch, pickPlayer } from '../MatchCanvas'
@@ -63,10 +63,27 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
   }, [controller])
 
   const st = engine.state
-  const minute = Math.floor((st.tick * 0.1) / 60)
-  const minuteLabel = minute >= 90 ? `90+${minute - 90}'` : `${minute}'`
+  // Le tick court sans discontinuer : en prolongation il porte encore l'arrêt
+  // de jeu de la seconde mi-temps, déjà joué. On le retranche à l'affichage —
+  // la prolongation montre alors 90 → 105 puis 105 → 120, tout en durant
+  // réellement deux fois quinze minutes. Seul le temps réglementaire nomme ses
+  // dépassements (90+n) ; les deux périodes de prolongation s'arrêtent pile.
+  const regulationEnd = 90
+  const extraTime = isExtraTime(st.phase)
+  const minute = Math.floor((st.tick * 0.1 - (extraTime ? st.addedTimeSec : 0)) / 60)
+  const minuteLabel =
+    !extraTime && minute >= regulationEnd ? `90+${minute - regulationEnd}'` : `${minute}'`
+
+  const breakLabel =
+    st.phase === 'halftime' ? 'MT' : st.phase === 'break_before_extra' ? "Fin 90'" : 'MT prol.'
+  const resumeLabel =
+    st.phase === 'halftime'
+      ? '▶ Coup d’envoi de la seconde période'
+      : st.phase === 'break_before_extra'
+        ? '▶ Coup d’envoi de la prolongation'
+        : '▶ Seconde période de la prolongation'
   const finished = st.phase === 'finished'
-  const halftime = st.phase === 'halftime'
+  const halftime = isBreak(st.phase)
   const kickoffPending = st.tick === 0 && controller.paused && !promptOpen
 
   const openTacticalPause = () => {
@@ -107,7 +124,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
           <span className="sb-team" style={{ color: opponent.color }}>
             {opponent.short}
           </span>
-          <span className="sb-minute">{finished ? 'Terminé' : halftime ? 'MT' : minuteLabel}</span>
+          <span className="sb-minute">{finished ? 'Terminé' : halftime ? breakLabel : minuteLabel}</span>
         </div>
 
         <div className="match-controls">
@@ -135,7 +152,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
           )}
           {halftime && (
             <button className="btn primary" onClick={() => controller.resume()}>
-              ▶ Coup d'envoi de la seconde période
+              {resumeLabel}
             </button>
           )}
           {finished && (
@@ -239,11 +256,12 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
             <h4>
               Endurance — {userTeam.short}{' '}
               <span className="muted small">
-                ({st.home.subsUsed}/{MAX_SUBS} remplacements · {st.home.subWindows}/{MAX_SUB_WINDOWS} fenêtres)
+                ({st.home.subsUsed}/{engine.maxSubs()} remplacements · {st.home.subWindows}/{engine.maxSubWindows()}{' '}
+                fenêtres)
               </span>
             </h4>
             {halftime && !finished && (
-              <p className="muted small">Mi-temps : les changements ne consomment pas de fenêtre.</p>
+              <p className="muted small">{breakLabel} : les changements ne consomment pas de fenêtre.</p>
             )}
             {subError && <p className="errors">✗ {subError}</p>}
             <ul className="stamina-list">
@@ -254,6 +272,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
                 return (
                   <li key={id}>
                     <span className="st-name" title={p.name}>
+                      {lp.injury === 'out' ? '🚑 ' : lp.injury === 'knock' ? '🤕 ' : ''}
                       {p.position} {p.name.split(' ').slice(-1)[0]}
                     </span>
                     <div className={`st-bar v-${lp.stamina > 60 ? 'hi' : lp.stamina > 35 ? 'mid' : 'lo'}`}>
@@ -265,10 +284,12 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
                         🔁
                       </button>
                     )}
-                    {subFor === id && (
+                    {canSub && subFor === id && (
                       <div className="sub-menu">
                         {bench
-                          .filter((b) => (p.role === 'GK' ? b.role === 'GK' : true))
+                          // règle du moteur, verbatim : un gardien ne remplace
+                          // qu'un gardien (l'inverse reste permis, faute de mieux)
+                          .filter((b) => b.role !== 'GK' || p.role === 'GK')
                           .map((b) => (
                             <button key={b.id} onClick={() => doSub(id, b.id)}>
                               {b.position} {b.name} <span className="muted">({Math.round(st.players[b.id].stamina)}%)</span>
