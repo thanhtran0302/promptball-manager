@@ -1031,6 +1031,80 @@ describe('prolongation', () => {
     expect(r.error).toMatch(/6\/6/)
   })
 
+  it('ouvre une 4e fenêtre en prolongation, distincte du plafond de joueurs', () => {
+    const { drawSeed } = findSeeds()
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: drawSeed,
+      knockout: true,
+    })
+    const bench = benchIds(engine)
+    expect(bench.length).toBeGreaterThanOrEqual(5)
+    const onPitch = () => engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch)
+
+    // amène le match tout près de la fin de la 2e mi-temps : consommer les
+    // fenêtres tôt dans le match changerait qui est sur le terrain pendant
+    // des dizaines de minutes et casserait le nul à 90' sur lequel repose tout
+    // le test (vérifié empiriquement) ; à quelques secondes de la fin, plus
+    // aucun remplacement ne peut encore influer sur le score du temps réglementaire.
+    let guard = 0
+    while (engine.state.phase !== 'second_half' && engine.state.phase !== 'finished' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    guard = 0
+    while (
+      engine.state.phase === 'second_half' &&
+      engine.state.periodEndTick - engine.state.tick > 60 &&
+      guard++ < 30000
+    ) {
+      engine.runTicks(1)
+    }
+    expect(engine.state.phase).toBe('second_half')
+
+    // consomme les 3 fenêtres réglementaires en jeu, avant la coupure : sans
+    // cela, un remplacement en prolongation n'exercerait rien de plus que
+    // l'ancien plafond fixe (3), et le test passerait pour une mauvaise raison.
+    for (let i = 0; i < 3; i++) {
+      engine.runTicks(1)
+      const out = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+      expect(engine.makeSub('home', out, bench[i]).ok).toBe(true)
+    }
+    expect(engine.state.home.subWindows).toBe(3)
+
+    // termine le temps réglementaire jusqu'à la coupure d'avant-prolongation
+    guard = 0
+    while (engine.state.phase !== 'finished' && engine.state.phase !== 'break_before_extra' && guard++ < 2000) {
+      engine.runTicks(500)
+      if (engine.state.phase === 'halftime') engine.startNextPeriod()
+    }
+    expect(engine.state.phase).toBe('break_before_extra')
+    expect(engine.state.home.subWindows).toBe(3) // la coupure elle-même n'ouvre aucune fenêtre
+
+    // franchit la coupure : on est en jeu, pas en pause
+    engine.startNextPeriod()
+    engine.runTicks(1)
+    expect(engine.state.phase).toBe('extra_first_half')
+
+    // un remplacement en jeu ouvre la 4e fenêtre, celle qu'accorde la prolongation
+    const out4 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    expect(engine.makeSub('home', out4, bench[3]).ok).toBe(true)
+    expect(engine.state.home.subWindows).toBe(4)
+
+    // une 5e fenêtre, plus tard dans le même temps de jeu, est refusée — le
+    // message et le nombre de joueurs utilisés prouvent que c'est bien le
+    // plafond de fenêtres qui a mordu, pas celui des joueurs
+    engine.runTicks(1)
+    const out5 = onPitch().find((id) => id !== engine.state.home.lineup[0])!
+    const r = engine.makeSub('home', out5, bench[4])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/fenêtre/)
+    expect(engine.state.home.subsUsed).toBeLessThan(6)
+  })
+
   it('refuse le 6e changement pendant le temps réglementaire', () => {
     const engine = subEngine()
     const lineup = [...engine.state.home.lineup]
