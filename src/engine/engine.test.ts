@@ -1226,6 +1226,108 @@ describe('prolongation', () => {
   })
 })
 
+describe('sortie sur blessure et remplacement forcé', () => {
+  /**
+   * Tire `injure` jusqu'à obtenir une blessure sévère ('out'), plafonné à 50
+   * essais pour ne jamais boucler indéfiniment. Le tirage de gravité est
+   * aléatoire (22 % de sévérité) : conditionner les assertions à
+   * `injury === 'out'` les aurait laissées ne rien vérifier une fois sur cinq
+   * quand le tirage ne sort pas. Ici la boucle force le cas, et l'assertion
+   * qui suit échoue explicitement si les 50 essais n'y sont pas parvenus.
+   */
+  function forceOut(engine: MatchEngine, side: 'home' | 'away', victim: string, cause: 'contact' | 'muscle') {
+    for (let i = 0; i < 50 && engine.state.players[victim].injury !== 'out'; i++) {
+      // @ts-expect-error accès direct à la méthode privée pour le test
+      engine.injure(side, victim, cause)
+    }
+  }
+
+  it('permet de remplacer un blessé sorti, jamais un exclu', () => {
+    const engine = subEngine()
+    engine.runTicks(1)
+    const bench = benchIds(engine)
+    const injured = engine.state.home.lineup[4]
+    engine.state.players[injured].injury = 'out'
+    engine.state.players[injured].onPitch = false
+    expect(engine.makeSub('home', injured, bench[0]).ok).toBe(true)
+
+    const excluded = engine.state.home.lineup[5]
+    engine.state.players[excluded].sentOff = true
+    engine.state.players[excluded].onPitch = false
+    engine.runTicks(1)
+    expect(engine.makeSub('home', excluded, bench[1]).ok).toBe(false)
+  })
+
+  it('le coach automatique remplace immédiatement un blessé sorti, hors rendez-vous', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['away'],
+    })
+    engine.runTicks(600) // 1 minute de jeu : bien avant tout rendez-vous (60e, 75e, mi-temps)
+    const victim = engine.state.away.lineup.find(
+      (id) => engine.state.players[id].onPitch && away.players.find((p) => p.id === id)!.role !== 'GK',
+    )!
+    const before = engine.state.away.subsUsed
+    forceOut(engine, 'away', victim, 'contact')
+    expect(engine.state.players[victim].injury).toBe('out')
+    expect(engine.state.away.subsUsed).toBe(before + 1)
+    expect(engine.state.away.lineup).not.toContain(victim)
+  })
+
+  it('finit à dix quand le quota est épuisé au moment de la blessure', () => {
+    // 'home' doit être un côté auto-coaché : sinon forcedSub renvoie avant
+    // même de regarder le quota, et le test ne prouverait rien de plus que
+    // « un côté humain ne se fait jamais remplacer », pas que le quota épuisé
+    // est bien la cause de l'infériorité numérique.
+    const engine = new MatchEngine({
+      home: deepHome,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['home'],
+    })
+    const lineup = [...engine.state.home.lineup]
+    const bench = benchIds(engine)
+    let n = 0
+    for (const perWindow of [2, 2, 1]) {
+      engine.runTicks(1)
+      for (let k = 0; k < perWindow; k++, n++) engine.makeSub('home', lineup[n + 1], bench[n])
+    }
+    expect(engine.state.home.subsUsed).toBe(5)
+
+    const victim = engine.state.home.lineup.find(
+      (id) => engine.state.players[id].onPitch && deepHome.players.find((p) => p.id === id)!.role !== 'GK',
+    )!
+    forceOut(engine, 'home', victim, 'muscle')
+    expect(engine.state.players[victim].injury).toBe('out')
+    const onPitch = engine.state.home.lineup.filter((id) => engine.state.players[id].onPitch).length
+    expect(onPitch).toBe(10)
+  })
+
+  it('un gardien blessé sorti est remplacé par un gardien du banc, pas par un joueur de champ', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 5,
+      autoSubSides: ['home'],
+    })
+    const gk = engine.state.home.lineup.find((id) => home.players.find((p) => p.id === id)!.role === 'GK')!
+    forceOut(engine, 'home', gk, 'contact')
+    expect(engine.state.players[gk].injury).toBe('out')
+
+    const inGoal = engine.state.home.lineup.find((id) => home.players.find((p) => p.id === id)!.role === 'GK')!
+    expect(inGoal).not.toBe(gk)
+    expect(home.players.find((p) => p.id === inGoal)!.role).toBe('GK')
+  })
+})
+
 describe('sorties de balle', () => {
   // Régression : aucun duel ne mettait le ballon dehors. 142 interceptions et
   // 25 tacles par match transféraient tous la possession sur place, et les
