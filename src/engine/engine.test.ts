@@ -772,12 +772,9 @@ describe('MatchEngine', () => {
   // niveau des défenseurs suit celui des attaquants. Le rendement doit donc
   // dépendre de l'ÉCART entre les deux, pas du niveau absolu.
   it('produit du football sur un effectif de Ligue 3, pas seulement sur une élite', () => {
-    // vingt seeds : un match compte deux ou trois buts, l'écart-type sur six
-    // matchs dépasse l'effet mesuré (le sous-échantillon [11..67] donne 1,17
-    // là où la moyenne est à 2,0)
-    const seeds = [
-      11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137,
-    ]
+    // soixante seeds, pas vingt : voir le commentaire au-dessus de l'assertion
+    // pour la marge réelle et pourquoi N a été augmenté plutôt que le plancher.
+    const seeds = Array.from({ length: 60 }, (_, i) => i + 1)
     const home = ligue3Squad('l3h', 'Est')
     const away = ligue3Squad('l3a', 'Ouest')
     let goals = 0
@@ -806,12 +803,26 @@ describe('MatchEngine', () => {
       if (total === 0) nilNil++
     }
     const perMatch = goals / seeds.length
+    // Marge mince, et c'est mesuré, pas supposé : 1,77 but/match sur ces 60
+    // seeds pour un plancher à 1,6, soit environ une erreur type d'écart (à
+    // N=60, écart-type par match ~1,3 → erreur type ~0,17). Ce test reste
+    // donc sensible à tout changement du moteur qui rebat le flux aléatoire
+    // (RNG partagé : un correctif qui ajoute/retire un tirage dans certains
+    // ticks rebat tous les tirages suivants du match). La marge a rétréci
+    // le jour où la gestion de banc (`autoSubSides`) a été activée sur ce
+    // test — des réserves plus faibles que les titulaires font mécaniquement
+    // un peu moins de buts. Un échec ici doit d'abord être revérifié à N
+    // élevé (ex. 60 → 150+ seeds via une sonde jetable) avant d'être traité
+    // comme une régression : à N=20 un correctif sain avait fait passer la
+    // mesure de 1,75 à 1,60 (sous le plancher) par pur bruit d'échantillonnage,
+    // confirmé en remontant à 1,77 sur ces 60 seeds.
     expect(perMatch).toBeGreaterThan(1.6)
     expect(perMatch).toBeLessThan(3.6)
     // Les 0-0 existent, ils ne sont pas la norme. Borne large : à 2 buts par
-    // match, Poisson en attend déjà 13 % avec un écart-type de ±1,5 sur vingt
-    // matchs — c'est la moyenne de buts ci-dessus qui porte le test, pas ce
-    // compteur, qui ne sert qu'à repérer un moteur qui ne marque plus du tout.
+    // match, Poisson en attend déjà 13 % avec un écart-type de ±1,5 sur ces
+    // soixante matchs — c'est la moyenne de buts ci-dessus qui porte le test,
+    // pas ce compteur, qui ne sert qu'à repérer un moteur qui ne marque plus
+    // du tout.
     expect(nilNil).toBeLessThan(seeds.length / 3)
   })
 
@@ -1168,6 +1179,32 @@ describe('prolongation', () => {
     expect(out / 20).toBeLessThanOrEqual(0.45)
     expect(knocks / 20).toBeGreaterThanOrEqual(0.8)
     expect(knocks / 20).toBeLessThanOrEqual(1.6)
+  })
+
+  // Régression : un coup franc réattribuait le ballon au fauté même quand une
+  // blessure venait de le sortir (et remplacer) 30 lignes plus haut — un
+  // fantôme hors terrain tirait son propre coup franc. Invariant testé
+  // directement, tick par tick, plutôt que le seul scénario qui l'a révélé :
+  // sinon on ne rattrape que ce cas précis, pas la classe de bug.
+  it("le porteur du ballon, s'il existe, est toujours sur le terrain (invariant, à chaque tick)", () => {
+    for (let s = 0; s < 10; s++) {
+      const engine = new MatchEngine({
+        home,
+        away,
+        homeInstructions: defaultInstructions(),
+        awayInstructions: defaultInstructions(),
+        seed: 700 + s * 131,
+        autoSubSides: ['home', 'away'],
+      })
+      let guard = 0
+      while (engine.state.phase !== 'finished' && guard++ < 200_000) {
+        engine.runTicks(1)
+        if (isBreak(engine.state.phase)) engine.startNextPeriod()
+        const carrierId = engine.state.ball.carrierId
+        if (carrierId) expect(engine.state.players[carrierId].onPitch).toBe(true)
+      }
+      expect(engine.state.phase).toBe('finished')
+    }
   })
 })
 

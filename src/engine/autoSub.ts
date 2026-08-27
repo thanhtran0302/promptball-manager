@@ -82,9 +82,24 @@ export function pickReplacement(engine: MatchEngine, side: Side, outId: string):
   const st = engine.state
   const tms = st[side]
   const outRole = tms.team.players.find((p) => p.id === outId)?.role
+  const outIsGK = outRole === 'GK'
+  // ponytail: le banc est pris dans l'ordre de l'effectif, qui est déjà trié
+  // par niveau dans les données. Un vrai choix (note × fraîcheur × poste)
+  // demanderait un modèle d'évaluation ; à ajouter si le bench montre des
+  // entrées absurdes.
   const pool = tms.team.players.filter((p) => {
     const lp = st.players[p.id]
-    return lp && !lp.onPitch && !lp.sentOff && !lp.subbedOff && lp.injury === 'none' && p.role !== 'GK'
+    // un gardien sortant ne peut être remplacé que par un gardien ; sinon, le
+    // gardien du banc est hors-pool comme avant — jamais un joueur de champ
+    // entre en but faute de doublure au bon poste.
+    return (
+      lp &&
+      !lp.onPitch &&
+      !lp.sentOff &&
+      !lp.subbedOff &&
+      lp.injury === 'none' &&
+      (outIsGK ? p.role === 'GK' : p.role !== 'GK')
+    )
   })
   if (pool.length === 0) return null
   return (pool.find((p) => p.role === outRole) ?? pool[0]).id

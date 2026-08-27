@@ -151,13 +151,16 @@ const INJURY_ENDURANCE_MUL = 0.8
  * (faute subie, tacle propre encaissé) et la lésion musculaire (sprint sur
  * des jambes vides). Cibles UEFA (~8 blessures / 1000 h) : 0,25-0,45
  * sortie/match et 0,8-1,6 touché/match, toutes équipes confondues.
- * Mesuré : 0,30 sortie/match et 1,00 touché/match sur 40 matchs (sonde
- * `scripts/probe-injuries.ts`).
+ * Mesuré : 0,30 sortie/match et 1,00 touché/match sur 40 matchs (TEAMS vs
+ * TEAMS, `autoSubSides: []` — sans banc géré d'aucun côté, ce qui N'EST PAS
+ * la configuration du harnais de référence `scripts/sim.ts`, qui passe les
+ * deux côtés).
  * Mesure d'isolement (INJURY_SPEED_MUL et INJURY_ENDURANCE_MUL remis à 1,
- * sans rien changer d'autre) : sur un effectif de Ligue 3 (20 matchs), le
- * malus de touché ne coûte que 0,05 but/match (1,75 → 1,80) ; l'essentiel de
- * l'écart avec la baseline sans blessure (2,00) vient donc du niveau du banc
- * de remplacement, pas du malus du joueur diminué.
+ * sans rien changer d'autre) : sur un effectif de Ligue 3 (20 matchs, banc
+ * géré des deux côtés comme au harnais de référence), le malus de touché ne
+ * coûte que 0,05 but/match (1,75 → 1,80) ; l'essentiel de l'écart avec la
+ * baseline sans blessure (2,00) vient donc du niveau du banc de
+ * remplacement, pas du malus du joueur diminué.
  */
 const INJURY_ON_FOUL = 0.05
 const INJURY_ON_CLEAN_TACKLE = 0.008
@@ -1656,7 +1659,11 @@ export class MatchEngine {
 
       // coup franc : possession conservée, petit temps de repli
       this.markSetPieceIfDangerous(carrier.side, STOPPAGE_S.freeKick, carrier.x, carrier.y)
-      st.ball.carrierId = carrier.id
+      // le fauté a pu quitter le terrain entre-temps (blessure + remplacement
+      // forcé juste au-dessus, qui l'a déjà remplacé) : le tireur doit être un
+      // joueur réellement sur la pelouse, jamais le fantôme qu'on vient de sortir.
+      const taker = carrier.onPitch ? carrier : this.nearestTo(carrier.x, carrier.y, carrier.side)
+      st.ball.carrierId = taker?.id ?? null
       st.possession = carrier.side
       this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.freeKick)
       this.restartExemptUntilTick = st.tick + 40
@@ -2395,9 +2402,13 @@ export class MatchEngine {
     // cas où le sortant n'est pas sur la pelouse. L'exclu, lui, ne l'est pas.
     if (!out || (!out.onPitch && out.injury !== 'out'))
       return { ok: false, error: `${this.nameOf(outId)} n'est pas sur le terrain.` }
+    // déjà remplacé une fois : un second sortant sur le même id écrirait
+    // lineup[-1] (indexOf renvoie -1), un 12e joueur fantôme sur le terrain.
+    if (out.subbedOff) return { ok: false, error: `${this.nameOf(outId)} a déjà été remplacé.` }
     if (!inc || inc.onPitch) return { ok: false, error: `${this.nameOf(inId)} est déjà sur le terrain.` }
     if (inc.subbedOff) return { ok: false, error: `${this.nameOf(inId)} a déjà été remplacé.` }
     if (inc.sentOff) return { ok: false, error: `${this.nameOf(inId)} a été exclu.` }
+    if (inc.injury === 'out') return { ok: false, error: `${this.nameOf(inId)} est blessé, il ne peut pas entrer.` }
     if (this.player(inId).role === 'GK' && this.player(outId).role !== 'GK')
       return { ok: false, error: 'Un gardien ne peut remplacer qu’un gardien (MVP).' }
 
