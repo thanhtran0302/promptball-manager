@@ -772,9 +772,21 @@ describe('MatchEngine', () => {
   // niveau des défenseurs suit celui des attaquants. Le rendement doit donc
   // dépendre de l'ÉCART entre les deux, pas du niveau absolu.
   it('produit du football sur un effectif de Ligue 3, pas seulement sur une élite', () => {
-    // soixante seeds, pas vingt : voir le commentaire au-dessus de l'assertion
-    // pour la marge réelle et pourquoi N a été augmenté plutôt que le plancher.
-    const seeds = Array.from({ length: 60 }, (_, i) => i + 1)
+    // Les 20 seeds d'origine, complétées jusqu'à 60 par les nombres premiers
+    // suivants (139, 149, 151…) — même convention que la liste d'origine.
+    // Volontairement PAS un générateur 1..60 : un correctif sain avait fait
+    // passer ce test de 1,75 à 1,60 (sous le plancher), et remonter à 60
+    // échantillons en changeant aussi leur composition (seeds 67 à 137
+    // disparus) aurait rendu « bruit d'échantillonnage » et « échantillon
+    // différent » indissociables. En ne faisant qu'ajouter, l'affirmation
+    // « on a seulement plus d'échantillons » devient vraie par construction.
+    // Voir le commentaire au-dessus de l'assertion pour la marge mesurée.
+    const seeds = [
+      11, 23, 37, 41, 59, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139,
+      149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241,
+      251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359,
+      367,
+    ]
     const home = ligue3Squad('l3h', 'Est')
     const away = ligue3Squad('l3a', 'Ouest')
     let goals = 0
@@ -803,19 +815,25 @@ describe('MatchEngine', () => {
       if (total === 0) nilNil++
     }
     const perMatch = goals / seeds.length
-    // Marge mince, et c'est mesuré, pas supposé : 1,77 but/match sur ces 60
-    // seeds pour un plancher à 1,6, soit environ une erreur type d'écart (à
-    // N=60, écart-type par match ~1,3 → erreur type ~0,17). Ce test reste
-    // donc sensible à tout changement du moteur qui rebat le flux aléatoire
-    // (RNG partagé : un correctif qui ajoute/retire un tirage dans certains
-    // ticks rebat tous les tirages suivants du match). La marge a rétréci
-    // le jour où la gestion de banc (`autoSubSides`) a été activée sur ce
-    // test — des réserves plus faibles que les titulaires font mécaniquement
-    // un peu moins de buts. Un échec ici doit d'abord être revérifié à N
-    // élevé (ex. 60 → 150+ seeds via une sonde jetable) avant d'être traité
-    // comme une régression : à N=20 un correctif sain avait fait passer la
-    // mesure de 1,75 à 1,60 (sous le plancher) par pur bruit d'échantillonnage,
-    // confirmé en remontant à 1,77 sur ces 60 seeds.
+    // Marge mesurée, pas supposée : 1,93 but/match sur ces 60 seeds (les 20
+    // d'origine + 40 nouveaux) pour un plancher à 1,6 — confortable, mais ce
+    // test reste par nature sensible à tout changement du moteur qui rebat
+    // le flux aléatoire (RNG partagé : un correctif qui ajoute/retire un
+    // tirage dans certains ticks rebat tous les tirages suivants du match).
+    // La marge s'était réduite le jour où la gestion de banc
+    // (`autoSubSides`) a été activée sur ce test — des réserves plus
+    // faibles que les titulaires font mécaniquement un peu moins de buts.
+    // Un échec ici doit d'abord être revérifié à N élevé (sonde jetable)
+    // avant d'être traité comme une régression : à N=20 un correctif sain
+    // avait fait passer la mesure de 1,75 à 1,60 (sous le plancher) par pur
+    // bruit d'échantillonnage. Une première remontée à N=60 via un simple
+    // générateur 1..60 avait donné 1,77 — mais cet échantillon ne
+    // recouvrait que 5 des 20 seeds d'origine, rendant « plus
+    // d'échantillons » et « échantillon différent » indissociables. Cette
+    // liste-ci ajoute strictement aux 20 seeds d'origine (rien n'est
+    // retiré), ce qui isole proprement l'effet de la taille : le résultat
+    // (1,93) confirme que la chute à 1,60 était bien du bruit, sur un
+    // échantillon qui ne doit rien à un tri favorable.
     expect(perMatch).toBeGreaterThan(1.6)
     expect(perMatch).toBeLessThan(3.6)
     // Les 0-0 existent, ils ne sont pas la norme. Borne large : à 2 buts par
