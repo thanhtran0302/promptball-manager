@@ -613,15 +613,8 @@ export class MatchEngine {
       return
     }
     const p = clamp((st.tick - t.startTick) / Math.max(t.endTick - t.startTick, 1), 0, 1)
-    // course au ballon « homing » : la cible suit le joueur qui la cherche,
-    // sinon la balle se téléporte vers lui à l'arrivée
-    if (t.kind === 'clearance' && t.intendedReceiverId) {
-      const r = st.players[t.intendedReceiverId]
-      if (r && r.onPitch) {
-        t.toX = r.x
-        t.toY = r.y
-      }
-    }
+    // la balle roule vers un point FIXE (pas de guidage) : c'est au joueur
+    // d'anticiper le point de chute — voir l'anticipation dans movePlayers
     st.ball.x = t.fromX + (t.toX - t.fromX) * p
     st.ball.y = t.fromY + (t.toY - t.fromY) * p
     if (st.tick >= t.endTick) {
@@ -1404,8 +1397,9 @@ export class MatchEngine {
 
     st.ball.carrierId = null
     st.ball.transit = {
-      fromX: carrier.x,
-      fromY: carrier.y,
+      // départ = position réelle du ballon aux pieds (0,8 m devant le passeur)
+      fromX: st.ball.x,
+      fromY: st.ball.y,
       toX: lineIntercepted ? linePick!.player.x : toX,
       toY: lineIntercepted ? linePick!.player.y : toY,
       startTick: st.tick,
@@ -1561,8 +1555,8 @@ export class MatchEngine {
 
     st.ball.carrierId = null
     st.ball.transit = {
-      fromX: carrier.x,
-      fromY: carrier.y,
+      fromX: st.ball.x,
+      fromY: st.ball.y,
       toX: clamp(tx, 0, PITCH.L),
       toY: clamp(ty, -2, PITCH.W + 2),
       startTick: st.tick,
@@ -1747,17 +1741,32 @@ export class MatchEngine {
         this.evaluateSlice(lp)
       }
 
+      // anticipation : le joueur désigné d'une balle en mouvement court au
+      // point de chute fixe — c'est le joueur qui va à la balle, jamais
+      // l'inverse (fini la balle aimantée qui vire vers son receveur)
+      const transit = st.ball.transit
+      const awaited =
+        transit &&
+        transit.intendedReceiverId === lp.id &&
+        p.role !== 'GK' &&
+        (transit.kind === 'clearance' ||
+          (transit.kind === 'pass' && transit.success && !transit.offside && !transit.interceptedById))
+          ? { x: transit.toX, y: transit.toY }
+          : null
+
       const tgt =
-        p.role !== 'GK' && this.sliceTargets.has(lp.id)
+        awaited ??
+        (p.role !== 'GK' && this.sliceTargets.has(lp.id)
           ? this.sliceTargets.get(lp.id)!
-          : this.targetFor(lp)
+          : this.targetFor(lp))
       const d = dist(lp.x, lp.y, tgt.x, tgt.y)
       const knocked = lp.injury === 'knock'
       const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina) * (knocked ? INJURY_SPEED_MUL : 1)
       const isCarrier = st.ball.carrierId === lp.id
       // zone morte : à son poste, on tient sa position (arrête le papillonnage)
-      const deadZone =
-        p.role === 'GK'
+      const deadZone = awaited
+        ? 0.4 // au point de chute, au mètre
+        : p.role === 'GK'
           ? 2.5 // le gardien se replace par paliers, il ne suit pas le ballon au mètre
           : lp.behavior === 'close_down' || lp.behavior === 'mark_man'
             ? 0.8 // le presseur doit arriver à portée de tacle
@@ -1769,7 +1778,7 @@ export class MatchEngine {
               : isCarrier
                 ? 1.5
                 : 3.5
-      const effort = p.role === 'GK' ? 0.4 : this.effortFor(lp, d, isCarrier)
+      const effort = awaited ? 1 : p.role === 'GK' ? 0.4 : this.effortFor(lp, d, isCarrier)
       // ballon mort : on se replace au pas, on ne court pas
       const vmax = deadBall ? DEAD_BALL_WALK_MS : vmaxFull * effort
       let speedRatio = 0
