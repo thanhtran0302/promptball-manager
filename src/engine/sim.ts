@@ -2367,11 +2367,11 @@ export class MatchEngine {
    * plus. isExtraTime couvre la coupure d'avant-prolongation, où le droit est
    * déjà ouvert.
    */
-  private maxSubs(): number {
+  maxSubs(): number {
     return isExtraTime(this.state.phase) ? MAX_SUBS + 1 : MAX_SUBS
   }
 
-  private maxSubWindows(): number {
+  maxSubWindows(): number {
     return isExtraTime(this.state.phase) ? MAX_SUB_WINDOWS + 1 : MAX_SUB_WINDOWS
   }
 

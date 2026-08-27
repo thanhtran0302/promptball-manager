@@ -31,9 +31,19 @@ interface Props {
   onGoSquad: () => void
   settings: LLMSettings
   onUpdateSettings: (s: LLMSettings) => void
+  knockout: boolean
+  onToggleKnockout: (v: boolean) => void
 }
 
-export function SetupScreen({ userTeamId, onChooseTeam, onGoSquad, settings, onUpdateSettings }: Props) {
+export function SetupScreen({
+  userTeamId,
+  onChooseTeam,
+  onGoSquad,
+  settings,
+  onUpdateSettings,
+  knockout,
+  onToggleKnockout,
+}: Props) {
   const [showSettings, setShowSettings] = useState(false)
 
   return (
@@ -66,6 +76,10 @@ export function SetupScreen({ userTeamId, onChooseTeam, onGoSquad, settings, onU
         <button className="btn ghost" onClick={() => setShowSettings(true)}>
           ⚙️ Réglages LLM {settings.apiKey ? '' : '(mode démo)'}
         </button>
+        <label className="muted small">
+          <input type="checkbox" checked={knockout} onChange={(e) => onToggleKnockout(e.target.checked)} />{' '}
+          Élimination directe (prolongation si nul)
+        </label>
         <button className="btn primary big" onClick={onGoSquad}>
           Voir l'effectif →
         </button>

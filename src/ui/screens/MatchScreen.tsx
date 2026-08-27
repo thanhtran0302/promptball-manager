@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { MAX_SUBS, MAX_SUB_WINDOWS, type MatchEngine } from '../../engine/sim'
-import { isBreak, type Team, type MatchInstructions } from '../../engine/types'
+import type { MatchEngine } from '../../engine/sim'
+import { isBreak, isExtraTime, type Team, type MatchInstructions } from '../../engine/types'
 import type { LLMSettings } from '../../llm/presets'
 import { MatchController, SPEEDS, type Speed } from '../../game/controller'
 import { CANVAS_H, CANVAS_W, drawMatch, pickPlayer } from '../MatchCanvas'
@@ -64,7 +64,26 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
 
   const st = engine.state
   const minute = Math.floor((st.tick * 0.1) / 60)
-  const minuteLabel = minute >= 90 ? `90+${minute - 90}'` : `${minute}'`
+  // 90+n en fin de temps réglementaire, puis 91-105 / 105+n / 106-120 en
+  // prolongation : la minute brute suffit, seuls les dépassements se nomment
+  const regulationEnd = 90
+  const extraFirstEnd = 105
+  const minuteLabel = isExtraTime(st.phase)
+    ? minute > extraFirstEnd && st.phase === 'extra_first_half'
+      ? `105+${minute - extraFirstEnd}'`
+      : `${minute}'`
+    : minute >= regulationEnd
+      ? `90+${minute - regulationEnd}'`
+      : `${minute}'`
+
+  const breakLabel =
+    st.phase === 'halftime' ? 'MT' : st.phase === 'break_before_extra' ? 'Fin 90’' : 'MT prol.'
+  const resumeLabel =
+    st.phase === 'halftime'
+      ? '▶ Coup d’envoi de la seconde période'
+      : st.phase === 'break_before_extra'
+        ? '▶ Coup d’envoi de la prolongation'
+        : '▶ Seconde période de la prolongation'
   const finished = st.phase === 'finished'
   const halftime = isBreak(st.phase)
   const kickoffPending = st.tick === 0 && controller.paused && !promptOpen
@@ -107,7 +126,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
           <span className="sb-team" style={{ color: opponent.color }}>
             {opponent.short}
           </span>
-          <span className="sb-minute">{finished ? 'Terminé' : halftime ? 'MT' : minuteLabel}</span>
+          <span className="sb-minute">{finished ? 'Terminé' : halftime ? breakLabel : minuteLabel}</span>
         </div>
 
         <div className="match-controls">
@@ -135,7 +154,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
           )}
           {halftime && (
             <button className="btn primary" onClick={() => controller.resume()}>
-              ▶ Coup d'envoi de la seconde période
+              {resumeLabel}
             </button>
           )}
           {finished && (
@@ -239,7 +258,8 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
             <h4>
               Endurance — {userTeam.short}{' '}
               <span className="muted small">
-                ({st.home.subsUsed}/{MAX_SUBS} remplacements · {st.home.subWindows}/{MAX_SUB_WINDOWS} fenêtres)
+                ({st.home.subsUsed}/{engine.maxSubs()} remplacements · {st.home.subWindows}/{engine.maxSubWindows()}{' '}
+                fenêtres)
               </span>
             </h4>
             {halftime && !finished && (
@@ -254,6 +274,7 @@ export function MatchScreen({ engine, userTeam, opponent, settings, onFinished }
                 return (
                   <li key={id}>
                     <span className="st-name" title={p.name}>
+                      {lp.injury === 'out' ? '🚑 ' : lp.injury === 'knock' ? '🤕 ' : ''}
                       {p.position} {p.name.split(' ').slice(-1)[0]}
                     </span>
                     <div className={`st-bar v-${lp.stamina > 60 ? 'hi' : lp.stamina > 35 ? 'mid' : 'lo'}`}>
