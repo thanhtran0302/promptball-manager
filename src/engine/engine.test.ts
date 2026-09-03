@@ -1421,6 +1421,44 @@ describe('sorties de balle', () => {
     expect(counts.goal_kick / seeds.length).toBeGreaterThan(3)
   })
 
+  // Régression : le tireur était téléporté sur le point de remise en jeu puis
+  // figé là tout le gel, en emmenant la balle avec lui — une touche partait
+  // jusqu'à 25 m plus loin que la sortie. Et `giveCorner` n'annulait pas le
+  // transit de la passe sortie : périmé, il reprenait la main au tick suivant,
+  // le corner n'était jamais joué et le tireur restait planté au drapeau.
+  it('pose la balle au point de remise en jeu et y fait venir le tireur', () => {
+    const engine = new MatchEngine({
+      home,
+      away,
+      homeInstructions: defaultInstructions(),
+      awayInstructions: defaultInstructions(),
+      seed: 7,
+    })
+    const st = engine.state
+    const hyp = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by)
+    const seen = new Set<string>()
+    for (let i = 0; i < 30000 && seen.size < 2; i++) {
+      const before = st.events.length
+      engine.tick()
+      const ev = st.events.slice(before).find((e) => e.type === 'throw_in' || e.type === 'corner')
+      if (!ev || seen.has(ev.type)) continue
+      seen.add(ev.type)
+      const spotX = st.ball.x
+      const spotY = st.ball.y
+      const takerId = st.ball.carrierId
+      expect(takerId).toBeTruthy()
+      const d0 = hyp(st.players[takerId!].x, st.players[takerId!].y, spotX, spotY)
+      engine.runTicks(100) // encore dans le gel (touche 180 ticks, corner 300)
+      expect(st.ball.transit).toBeNull()
+      expect(st.ball.carrierId).toBe(takerId)
+      expect(hyp(st.ball.x, st.ball.y, spotX, spotY)).toBeLessThan(0.5)
+      const taker = st.players[takerId!]
+      // il marche vers la balle (1,4 m/s ballon mort), il ne s'en éloigne pas
+      expect(hyp(taker.x, taker.y, spotX, spotY)).toBeLessThanOrEqual(Math.max(1, d0))
+    }
+    expect(seen.size).toBe(2)
+  })
+
   it('arrête réellement le jeu sur chaque remise en jeu', () => {
     // les durées d'arrêt étaient écrites en ticks au lieu de secondes : une
     // touche reprenait en 1 s, et le temps mort tombait sous 1 % du match
