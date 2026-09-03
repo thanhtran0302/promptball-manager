@@ -604,7 +604,10 @@ export class MatchEngine {
     const t = st.ball.transit
     if (!t) {
       const carrier = st.ball.carrierId ? st.players[st.ball.carrierId] : null
-      if (carrier) {
+      // Ballon mort : la balle reste au point de la remise en jeu. Sans ce
+      // garde-fou, le tireur l'emmenait avec lui pendant le gel — une touche
+      // partait 25 m plus loin que la sortie, le long de la ligne.
+      if (carrier && st.tick >= this.freezeUntilTick) {
         const goal = this.attackedGoal(carrier.side)
         const d = Math.max(dist(carrier.x, carrier.y, goal.x, goal.y), 1)
         st.ball.x = carrier.x + ((goal.x - carrier.x) / d) * 0.8
@@ -686,14 +689,12 @@ export class MatchEngine {
     const taker = this.nearestTo(x, y, side)
     if (!taker) return
     st.ball.transit = null
-    taker.x = clamp(x, 1, PITCH.L - 1)
-    taker.y = clamp(y, 1, PITCH.W - 1)
-    taker.prevX = taker.x
-    taker.prevY = taker.y
-    st.ball.x = taker.x
-    st.ball.y = taker.y
-    st.ball.prevX = taker.x
-    st.ball.prevY = taker.y
+    const bx = clamp(x, 1, PITCH.L - 1)
+    const by = clamp(y, 1, PITCH.W - 1)
+    st.ball.x = bx
+    st.ball.y = by
+    st.ball.prevX = bx
+    st.ball.prevY = by
     st.ball.carrierId = taker.id
     st.possession = side
     this.lastTouchSide = side
@@ -976,6 +977,11 @@ export class MatchEngine {
   private giveCorner(side: Side) {
     this.markSetPiece(side, STOPPAGE_S.corner)
     const st = this.state
+    // La balle sortie était encore en transit (checkOutOfBounds lit une passe
+    // en vol) : sans cette coupure, le transit périmé reprenait la main au
+    // tick suivant, le corner n'était jamais joué et le tireur restait planté
+    // au drapeau pendant les 30 s de gel.
+    st.ball.transit = null
     // spot de corner côté but adverse
     const goal = this.attackedGoal(side)
     const x = goal.x === PITCH.L ? PITCH.L - 1 : 1
@@ -994,13 +1000,13 @@ export class MatchEngine {
       }
     }
     if (taker) {
-      taker.x = x
-      taker.y = y
       st.ball.carrierId = taker.id
       st.possession = side
       this.lastTouchSide = side
       st.ball.x = x
       st.ball.y = y
+      st.ball.prevX = x
+      st.ball.prevY = y
       this.freezeUntilTick = st.tick + ticks(STOPPAGE_S.corner)
       this.restartExemptUntilTick = st.tick + 40
       this.nextDecisionTick = st.tick + 12
@@ -1754,7 +1760,12 @@ export class MatchEngine {
           ? { x: transit.toX, y: transit.toY }
           : null
 
+      // remise en jeu : le tireur va chercher le ballon posé sur le point au
+      // lieu de tenir son poste — c'est lui qui bouge, la balle ne bouge plus
+      const restart = deadBall && st.ball.carrierId === lp.id ? { x: st.ball.x, y: st.ball.y } : null
+
       const tgt =
+        restart ??
         awaited ??
         (p.role !== 'GK' && this.sliceTargets.has(lp.id)
           ? this.sliceTargets.get(lp.id)!
@@ -1764,7 +1775,9 @@ export class MatchEngine {
       const vmaxFull = maxSpeed(p.attributes.pace, lp.stamina) * (knocked ? INJURY_SPEED_MUL : 1)
       const isCarrier = st.ball.carrierId === lp.id
       // zone morte : à son poste, on tient sa position (arrête le papillonnage)
-      const deadZone = awaited
+      const deadZone = restart
+        ? 0.4 // sur le ballon, au mètre : c'est de là que part la remise en jeu
+        : awaited
         ? 0.4 // au point de chute, au mètre
         : p.role === 'GK'
           ? 2.5 // le gardien se replace par paliers, il ne suit pas le ballon au mètre
